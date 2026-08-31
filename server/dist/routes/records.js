@@ -1,0 +1,11 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const recordsController_1 = require("../controllers/recordsController");
+const auth_1 = require("../middleware/auth");
+const rbac_1 = require("../middleware/rbac");
+const router = (0, express_1.Router)();
+router.get('/', auth_1.requireAuth, recordsController_1.listRecords);
+router.get('/:id', auth_1.requireAuth, recordsController_1.getRecordById);
+router.patch('/:id', auth_1.requireAuth, (0, rbac_1.checkRole)(['REVIEWER', 'ADMIN']), recordsController_1.updateRecord);
+exports.default = router;

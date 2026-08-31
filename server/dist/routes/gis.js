@@ -1,0 +1,10 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const gisController_1 = require("../controllers/gisController");
+const auth_1 = require("../middleware/auth");
+const rbac_1 = require("../middleware/rbac");
+const router = (0, express_1.Router)();
+router.get('/boundary', auth_1.requireAuth, gisController_1.getPlotBoundary);
+router.put('/boundary', auth_1.requireAuth, (0, rbac_1.checkRole)(['ADMIN']), gisController_1.updatePlotBoundary);
+exports.default = router;
