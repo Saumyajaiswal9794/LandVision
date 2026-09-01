@@ -301,3 +301,4 @@ Or on fallback:
 - **SPRINT2_IMPLEMENTATION.md** - Full architecture, design decisions, examples
 - **SPRINT1_IMPLEMENTATION.md** - Auth, upload pipeline (Sprint 1)
 - **This file** - Setup & testing guide
+ok for that change
