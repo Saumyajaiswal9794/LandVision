@@ -46,6 +46,11 @@ function DashboardContent() {
     setError('');
 
     try {
+      if (!supabase) {
+        router.push('/login');
+        return;
+      }
+
       const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
       if (sessionError || !sessionData.session) {
         router.push('/login');

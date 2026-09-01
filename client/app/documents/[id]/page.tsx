@@ -102,6 +102,11 @@ export default function DocumentDetailPage() {
     setError('');
 
     try {
+      if (!supabase) {
+        router.push('/login');
+        return;
+      }
+
       const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
       if (sessionError || !sessionData.session) {
         router.push('/login');
@@ -157,6 +162,7 @@ export default function DocumentDetailPage() {
   };
 
   const getAuthToken = async (): Promise<string | null> => {
+    if (!supabase) return null;
     const { data } = await supabase.auth.getSession();
     return data.session?.access_token || null;
   };

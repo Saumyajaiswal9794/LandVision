@@ -45,6 +45,12 @@ export default function UploadPage() {
 
     try {
       // Get current session token
+      if (!supabase) {
+        setError('Not authenticated. Please login again.');
+        router.push('/login');
+        return;
+      }
+
       const { data, error: authError } = await supabase.auth.getSession();
 
       if (authError || !data.session) {

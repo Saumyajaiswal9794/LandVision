@@ -34,6 +34,14 @@ export function NavBarWrapper({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!mounted) return;
+    if (!supabase) {
+      // Supabase not configured — treat as unauthenticated
+      setLoading(false);
+      if (!isPublic) {
+        router.push('/login');
+      }
+      return;
+    }
 
     const getSession = async () => {
       const { data, error } = await supabase.auth.getSession();
@@ -41,7 +49,6 @@ export function NavBarWrapper({ children }: { children: React.ReactNode }) {
       if (error || !data.session) {
         setRole(null);
         setLoading(false);
-        // Redirect to login if trying to access protected page
         if (!isPublic) {
           router.push('/login');
         }
@@ -78,7 +85,6 @@ export function NavBarWrapper({ children }: { children: React.ReactNode }) {
   return (
     <NavContext.Provider value={{ role, loading }}>
       {showNav && <NavBar role={role} />}
-      {/* Re-clone children so they re-render when role changes */}
       <>{children}</>
     </NavContext.Provider>
   );

@@ -16,7 +16,7 @@ export function NavBar({ role }: NavBarProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    if (supabase) await supabase.auth.signOut();
     router.push('/login');
   };
 

@@ -20,6 +20,12 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
+      if (!supabase) {
+        setError('Supabase is not configured. Please set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in client/.env.local');
+        setLoading(false);
+        return;
+      }
+
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,

@@ -35,6 +35,12 @@ export default function SignUpPage() {
     }
 
     try {
+      if (!supabase) {
+        setError('Supabase is not configured. Please set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in client/.env.local');
+        setLoading(false);
+        return;
+      }
+
       // Sign up with Supabase
       const { data, error } = await supabase.auth.signUp({
         email,
