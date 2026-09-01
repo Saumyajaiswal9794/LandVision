@@ -1,139 +1,308 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState, useCallback, Suspense } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabaseClient';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../../components/card';
-import { Button } from '../../components/button';
-import { Search, MapPin, Layers } from 'lucide-react';
+import { MapContainer, TileLayer, Polygon, Popup, useMap } from 'react-leaflet';
+import { Loader2, MapPin, Eye } from 'lucide-react';
+import 'leaflet/dist/leaflet.css';
 
-export default function MapPage() {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedPlot, setSelectedPlot] = useState<string | null>(null);
+// Fix Leaflet default icon issue in Next.js
+import L from 'leaflet';
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+});
 
-  const mockPlots = [
-    { id: 'plot-101', khasra: '123/45', owners: 'Ram Lal', area: '1.5 Hectares', coords: 'M 100,100 L 250,100 L 220,250 L 80,220 Z' },
-    { id: 'plot-102', khasra: '124/11', owners: 'Hari Singh', area: '0.8 Hectares', coords: 'M 250,100 L 400,120 L 380,240 L 220,250 Z' },
-    { id: 'plot-103', khasra: '125/2', owners: 'Gopal Prasad', area: '2.1 Hectares', coords: 'M 80,220 L 220,250 L 180,380 L 50,320 Z' },
-  ];
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+
+// --- Status color scheme (matches dashboard) ---
+const STATUS_COLORS: Record<string, string> = {
+  uploaded:          '#94a3b8', // slate-400
+  extracting:        '#eab308', // yellow-500
+  extracted:         '#3b82f6', // blue-500
+  extraction_failed: '#ef4444', // red-500
+  needs_review:      '#f97316', // orange-500
+  auto_approved:     '#22c55e', // green-500
+  reviewed_approved: '#14b8a6', // teal-500
+  reviewed_rejected: '#ef4444', // red-500
+};
+
+const DEFAULT_COLOR = '#94a3b8';
+
+interface Feature {
+  type: string;
+  geometry: {
+    type: string;
+    coordinates: number[][][];
+  };
+  properties: {
+    plotId: number;
+    khasraNumber: string;
+    village: string;
+    district: string;
+    recordId: string | null;
+    status: string | null;
+    ownerName: string | null;
+  };
+}
+
+interface FeatureCollection {
+  type: string;
+  features: Feature[];
+}
+
+/** Component that flies the map to the bounds of loaded features */
+function FitBoundsOnLoad({ features }: { features: Feature[] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (features.length === 0) return;
+    const coords = features.flatMap((f) =>
+      f.geometry.coordinates[0].map((c) => [c[1], c[0]] as [number, number]),
+    );
+    if (coords.length > 0) {
+      const bounds = L.latLngBounds(coords);
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+    }
+  }, [features, map]);
+  return null;
+}
+
+function MapContent({ villageList, preselectedVillage }: { villageList: string[]; preselectedVillage: string | null }) {
+  const router = useRouter();
+  const [selectedVillage, setSelectedVillage] = useState(preselectedVillage || '');
+  const [featureCollection, setFeatureCollection] = useState<FeatureCollection | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const fetchVillagePlots = useCallback(async (village: string) => {
+    if (!village) {
+      setFeatureCollection(null);
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      if (!supabase) {
+        router.push('/login');
+        return;
+      }
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        router.push('/login');
+        return;
+      }
+      const token = sessionData.session.access_token;
+      const res = await fetch(`${API_BASE_URL}/api/gis/village/${encodeURIComponent(village)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Failed to fetch plots (${res.status})`);
+      }
+      const data = await res.json();
+      setFeatureCollection(data);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [router]);
+
+  // Auto-fetch if preselected
+  useEffect(() => {
+    if (preselectedVillage) {
+      setSelectedVillage(preselectedVillage);
+      fetchVillagePlots(preselectedVillage);
+    }
+  }, [preselectedVillage, fetchVillagePlots]);
+
+  const handleVillageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const v = e.target.value;
+    setSelectedVillage(v);
+    fetchVillagePlots(v);
+  };
+
+  const getStatusColor = (status: string | null) => {
+    if (!status) return DEFAULT_COLOR;
+    return STATUS_COLORS[status] || DEFAULT_COLOR;
+  };
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Geospatial Plot Viewer</h1>
         <p className="text-slate-500 mt-1">
-          Verify GIS parcel boundaries mapped from scanned coordinate registers against satellite PostGIS records.
+          View cadastral plot boundaries on an interactive map. Polygons are color-coded by document status.
         </p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-4">
-        {/* Sidebar Controls */}
+        {/* Sidebar */}
         <Card className="lg:col-span-1 flex flex-col">
           <CardHeader>
-            <CardTitle>Search Parcel</CardTitle>
-            <CardDescription>Locate boundaries by Khasra or Village</CardDescription>
+            <CardTitle className="text-lg">Village Selector</CardTitle>
+            <CardDescription>Choose a village to display its plot boundaries.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4 flex-1">
-            <div className="relative">
-              <input
-                type="text"
-                placeholder="Enter Khasra number..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full border border-slate-200 rounded-md pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-brand-500"
-              />
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-            </div>
+            <select
+              value={selectedVillage}
+              onChange={handleVillageChange}
+              className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-brand-500 bg-white"
+            >
+              <option value="">Select a village...</option>
+              {villageList.map((v) => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </select>
 
             <div className="space-y-2">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                Layers
-              </label>
-              <div className="flex flex-col space-y-1">
-                <button className="flex items-center space-x-2 text-sm font-medium text-brand-600 bg-brand-50/50 p-2 rounded">
-                  <Layers className="w-4 h-4" />
-                  <span>Cadastral Survey Map</span>
-                </button>
-                <button className="flex items-center space-x-2 text-sm font-medium text-slate-600 hover:bg-slate-50 p-2 rounded">
-                  <MapPin className="w-4 h-4" />
-                  <span>Satellite Ortho-imagery</span>
-                </button>
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Legend</label>
+              <div className="space-y-1.5 text-xs">
+                <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-sm bg-green-500" /> Auto Approved</div>
+                <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-sm bg-teal-500" /> Reviewed Approved</div>
+                <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-sm bg-orange-500" /> Needs Review</div>
+                <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-sm bg-slate-400" /> Uploaded / No Record</div>
+                <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-sm bg-red-500" /> Failed / Rejected</div>
               </div>
             </div>
 
-            <div className="border-t border-slate-100 pt-4 space-y-2">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                Selected Plot Details
-              </label>
-              
-              {selectedPlot ? (
-                (() => {
-                  const plot = mockPlots.find((p) => p.id === selectedPlot);
-                  return plot ? (
-                    <div className="text-sm space-y-2 bg-slate-50 p-3 rounded-lg border">
-                      <div><strong>Khasra No:</strong> {plot.khasra}</div>
-                      <div><strong>Area:</strong> {plot.area}</div>
-                      <div><strong>Owner:</strong> {plot.owners}</div>
-                      <Button variant="ghost" size="sm" className="w-full text-xs" onClick={() => setSelectedPlot(null)}>
-                        Clear Selection
-                      </Button>
-                    </div>
-                  ) : null;
-                })()
-              ) : (
-                <div className="text-xs text-slate-400 italic">
-                  Click a boundary on the map to show ownership registry properties.
-                </div>
-              )}
-            </div>
+            {error && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-xs">
+                {error}
+              </div>
+            )}
+
+            {loading && (
+              <div className="flex items-center gap-2 text-slate-400 text-sm">
+                <Loader2 className="w-4 h-4 animate-spin" /> Loading plots...
+              </div>
+            )}
+
+            {featureCollection && !loading && (
+              <div className="text-xs text-slate-500 border-t border-slate-100 pt-3">
+                {featureCollection.features.length} plot{featureCollection.features.length !== 1 ? 's' : ''} loaded
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        {/* Map Rendering Container */}
-        <Card className="lg:col-span-3 min-h-[500px] flex flex-col relative overflow-hidden bg-slate-950">
-          <CardHeader className="text-white border-b border-slate-800 z-10">
-            <CardTitle className="text-lg">Interactive Map Canvas</CardTitle>
-            <CardDescription className="text-slate-400 text-xs">
-              District: Jaipur | Village: Rampur | Tehsil: Sanganer
-            </CardDescription>
-          </CardHeader>
-          
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            {/* SVG grid patterns representing land plot mapping grid */}
-            <svg className="w-full h-full opacity-10" xmlns="http://www.w3.org/2000/svg">
-              <defs>
-                <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                  <path d="M 40 0 L 0 0 0 40" fill="none" stroke="white" strokeWidth="1" />
-                </pattern>
-              </defs>
-              <rect width="100%" height="100%" fill="url(#grid)" />
-            </svg>
-          </div>
-
-          <div className="flex-1 relative flex items-center justify-center p-6">
-            <svg viewBox="0 0 500 500" className="w-full max-w-[500px] aspect-square">
-              {mockPlots.map((plot) => (
-                <path
-                  key={plot.id}
-                  d={plot.coords}
-                  onClick={() => setSelectedPlot(plot.id)}
-                  className={`cursor-pointer transition-all duration-300 stroke-2 outline-none ${
-                    selectedPlot === plot.id
-                      ? 'fill-brand-500/40 stroke-brand-400'
-                      : 'fill-transparent stroke-slate-500 hover:fill-slate-500/20 hover:stroke-slate-300'
-                  }`}
+        {/* Map */}
+        <Card className="lg:col-span-3 flex flex-col overflow-hidden">
+          <CardContent className="p-0 flex-1 relative" style={{ minHeight: '500px' }}>
+            {!selectedVillage ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 gap-3">
+                <MapPin className="w-12 h-12" />
+                <p className="text-sm">Select a village to view plot boundaries</p>
+              </div>
+            ) : (
+              <MapContainer
+                center={[31.68, 76.53]}
+                zoom={14}
+                style={{ height: '100%', width: '100%', minHeight: '500px' }}
+                className="z-0"
+              >
+                <TileLayer
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 />
-              ))}
-              {/* Text overlays representing Khasra plot Numbers */}
-              <text x="140" y="160" fill="white" className="text-xs font-mono font-bold pointer-events-none select-none opacity-60">123/45</text>
-              <text x="300" y="170" fill="white" className="text-xs font-mono font-bold pointer-events-none select-none opacity-60">124/11</text>
-              <text x="120" y="300" fill="white" className="text-xs font-mono font-bold pointer-events-none select-none opacity-60">125/2</text>
-            </svg>
-          </div>
-
-          <div className="absolute bottom-4 right-4 bg-slate-900/80 text-white text-xs px-3 py-1.5 rounded backdrop-blur border border-slate-800 pointer-events-none">
-            Scale: 1 : 2,000 | Spatial Reference: EPSG:4326 (WGS 84 / PostGIS)
-          </div>
+                {featureCollection?.features.map((feature) => {
+                  const coords = feature.geometry.coordinates[0].map(
+                    (c) => [c[1], c[0]] as [number, number],
+                  );
+                  const color = getStatusColor(feature.properties.status);
+                  return (
+                    <Polygon
+                      key={feature.properties.plotId}
+                      positions={coords}
+                      pathOptions={{
+                        color: color,
+                        weight: 2,
+                        fillColor: color,
+                        fillOpacity: 0.3,
+                      }}
+                    >
+                      <Popup>
+                        <div className="text-sm space-y-1 min-w-[180px]">
+                          <div className="font-bold">Khasra: {feature.properties.khasraNumber}</div>
+                          <div>Village: {feature.properties.village}</div>
+                          {feature.properties.ownerName && (
+                            <div>Owner: {feature.properties.ownerName}</div>
+                          )}
+                          <div>
+                            Status:{' '}
+                            <span style={{ color }} className="font-medium capitalize">
+                              {feature.properties.status?.replace(/_/g, ' ') || 'No record'}
+                            </span>
+                          </div>
+                          {feature.properties.recordId && (
+                            <a
+                              href={`/documents/${feature.properties.recordId}`}
+                              className="inline-flex items-center gap-1 text-brand-600 hover:underline mt-1"
+                            >
+                              <Eye className="w-3 h-3" /> View Record
+                            </a>
+                          )}
+                        </div>
+                      </Popup>
+                    </Polygon>
+                  );
+                })}
+                {featureCollection && <FitBoundsOnLoad features={featureCollection.features} />}
+              </MapContainer>
+            )}
+          </CardContent>
         </Card>
       </div>
     </div>
+  );
+}
+
+export default function MapPage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const [villageList, setVillageList] = useState<string[]>([]);
+  const preselectedVillage = searchParams.get('village');
+
+  useEffect(() => {
+    const fetchVillages = async () => {
+      try {
+        if (!supabase) {
+          router.push('/login');
+          return;
+        }
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (!sessionData.session) {
+          router.push('/login');
+          return;
+        }
+        const token = sessionData.session.access_token;
+        const res = await fetch(`${API_BASE_URL}/api/documents`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const villages = [...new Set((data.documents || []).map((d: any) => d.village).filter(Boolean))];
+        setVillageList(villages.sort());
+      } catch {
+        // Silently fail — village list is optional
+      } finally {
+        setLoadingVillages(false);
+      }
+    };
+    fetchVillages();
+  }, [router]);
+
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center py-20 text-slate-400">
+        <Loader2 className="w-6 h-6 animate-spin mr-3" /> Loading map...
+      </div>
+    }>
+      <MapContent villageList={villageList} preselectedVillage={preselectedVillage} />
+    </Suspense>
   );
 }
