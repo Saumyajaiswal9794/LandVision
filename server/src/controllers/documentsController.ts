@@ -11,35 +11,252 @@ import { env } from '../config/env';
 
 /**
  * Returns true if a Supabase signed URL has expired.
- * Supabase signed URLs contain a "token" JWT whose "exp" claim is the expiry Unix timestamp.
- * We detect expiry by checking if the URL's query-string token has elapsed — or, simpler,
- * we parse the "expires_in" embedded in the URL path segment issued by Supabase v2+.
- * As a conservative fallback we also treat an age of >55 minutes as stale.
  */
 function isSignedUrlExpired(storageUrl: string): boolean {
   try {
-    // Supabase v2 signed URLs include an "expires_in" param or a JWT "token" query param.
-    // We decode the token's "exp" claim to get the exact expiry.
     const url = new URL(storageUrl);
     const token = url.searchParams.get('token');
     if (token) {
-      // JWT is base64url encoded; payload is the second segment
       const payloadB64 = token.split('.')[1];
       if (payloadB64) {
         const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
         if (payload.exp) {
-          // Add a 60-second grace window to avoid edge-case races
           return Date.now() / 1000 > payload.exp - 60;
         }
       }
     }
-    // No token found — conservatively treat as potentially expired (refresh it)
     return false;
   } catch {
-    // If we can't parse, don't block extraction; attempt download as-is
     return false;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Sprint 3: GET /documents — list documents for the authenticated user
+// ---------------------------------------------------------------------------
+export const listDocuments = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const userRole = req.user.user_metadata?.role;
+    const userId = req.user.id;
+    const { status: statusFilter } = req.query;
+
+    // Build the query
+    const query: Record<string, unknown> = {};
+
+    if (userRole === 'officer') {
+      // Officers only see their own uploads
+      query.uploadedBy = userId;
+    }
+    // Reviewers see all documents (no uploadedBy filter)
+
+    if (statusFilter && typeof statusFilter === 'string') {
+      query.status = statusFilter;
+    }
+
+    const records = await LandRecord.find(query)
+      .sort({ createdAt: -1 })
+      .select('id filename village district status extractionSource createdAt')
+      .lean();
+
+    // Map _id to id for the response
+    const mapped = records.map((r: any) => ({
+      recordId: r._id?.toString?.() || r.id,
+      filename: r.filename,
+      village: r.village,
+      district: r.district,
+      status: r.status,
+      extractionSource: r.extractionSource,
+      createdAt: r.createdAt,
+    }));
+
+    res.status(200).json({ documents: mapped });
+  } catch (error) {
+    console.error('listDocuments error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Sprint 3: GET /documents/:id — full document detail
+// ---------------------------------------------------------------------------
+export const getDocumentDetail = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+    const userRole = req.user.user_metadata?.role;
+    const userId = req.user.id;
+
+    const record = await LandRecord.findById(id);
+
+    if (!record) {
+      res.status(404).json({ error: 'Document not found' });
+      return;
+    }
+
+    // Officers can only view their own documents
+    if (userRole === 'officer' && record.uploadedBy !== userId) {
+      res.status(403).json({ error: 'Forbidden: You can only view your own documents' });
+      return;
+    }
+
+    // Refresh the signed URL if expired
+    if (record.storageUrl && record.storagePath && isSignedUrlExpired(record.storageUrl)) {
+      try {
+        const freshUrl = await regenerateSignedUrl(record.storagePath);
+        record.storageUrl = freshUrl;
+        await record.save();
+      } catch (refreshErr) {
+        console.warn('Failed to refresh signed URL:', refreshErr);
+        // Continue anyway — the old URL might still work
+      }
+    }
+
+    const r = record as any;
+
+    res.status(200).json({
+      recordId: r._id,
+      filename: r.filename,
+      village: r.village,
+      district: r.district,
+      tehsil: r.tehsil,
+      state: r.state,
+      owners: r.owners,
+      areaTotal: r.areaTotal,
+      areaUnit: r.areaUnit,
+      documentId: r.documentId,
+      khataNumber: r.khataNumber,
+      khasraNumber: r.khasraNumber,
+      khatoniNumber: r.khatoniNumber,
+      extractedFields: r.extractedFields || {},
+      extractionSource: r.extractionSource,
+      validationFlags: r.validationFlags || [],
+      status: r.status,
+      storageUrl: r.storageUrl,
+      uploadedBy: r.uploadedBy,
+      reviewedBy: r.reviewedBy,
+      reviewedAt: r.reviewedAt,
+      extractionError: r.extractionError,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    });
+  } catch (error) {
+    console.error('getDocumentDetail error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Sprint 3: PATCH /documents/:id/review — reviewer actions
+// ---------------------------------------------------------------------------
+export const reviewDocument = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { action, correctedFields, reason } = req.body;
+
+    if (!['approve', 'reject', 'edit'].includes(action)) {
+      res.status(400).json({ error: 'Invalid action. Must be "approve", "reject", or "edit".' });
+      return;
+    }
+
+    const record = await LandRecord.findById(id);
+
+    if (!record) {
+      res.status(404).json({ error: 'Document not found' });
+      return;
+    }
+
+    if (record.status !== 'needs_review') {
+      res.status(400).json({
+        error: `Document status is "${record.status}". Only "needs_review" documents can be reviewed.`,
+      });
+      return;
+    }
+
+    if (action === 'approve') {
+      record.status = 'reviewed_approved';
+      record.reviewedBy = req.user.id;
+      record.reviewedAt = new Date();
+      await record.save();
+
+      res.status(200).json({
+        recordId: record._id,
+        status: record.status,
+        message: 'Document approved successfully.',
+      });
+      return;
+    }
+
+    if (action === 'reject') {
+      record.status = 'reviewed_rejected';
+      record.reviewedBy = req.user.id;
+      record.reviewedAt = new Date();
+      if (reason) {
+        record.extractionError = reason; // reuse the error field for rejection reason
+      }
+      await record.save();
+
+      res.status(200).json({
+        recordId: record._id,
+        status: record.status,
+        message: 'Document rejected.',
+      });
+      return;
+    }
+
+    if (action === 'edit') {
+      if (!correctedFields || typeof correctedFields !== 'object') {
+        res.status(400).json({ error: 'correctedFields object is required for "edit" action.' });
+        return;
+      }
+
+      // Merge corrected fields into extractedFields
+      const currentFields = record.extractedFields || {} as any;
+
+      for (const [fieldName, newValue] of Object.entries(correctedFields)) {
+        if (currentFields[fieldName]) {
+          currentFields[fieldName].value = newValue;
+          currentFields[fieldName].confidence = 1.0;
+          currentFields[fieldName].source = 'human_corrected';
+        }
+      }
+
+      record.extractedFields = currentFields;
+      record.status = 'reviewed_approved';
+      record.reviewedBy = req.user.id;
+      record.reviewedAt = new Date();
+      await record.save();
+
+      res.status(200).json({
+        recordId: record._id,
+        status: record.status,
+        extractedFields: record.extractedFields,
+        message: 'Corrections saved and document approved.',
+      });
+      return;
+    }
+  } catch (error) {
+    console.error('reviewDocument error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Sprint 1 & 2: Original controller functions (unchanged)
+// ---------------------------------------------------------------------------
 
 export const uploadDocument = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   let savedStoragePath: string | null = null;

@@ -1,6 +1,7 @@
 export interface ExtractedFieldValue {
     value: string | null;
     confidence: number;
+    source?: string;
 }
 export interface LandRecord {
     id: string;
@@ -10,7 +11,7 @@ export interface LandRecord {
     uploadedBy: string;
     storagePath: string | null;
     storageUrl: string;
-    status: 'uploaded' | 'ocr_done' | 'extracting' | 'extracted' | 'extraction_failed' | 'needs_review' | 'auto_approved' | 'reviewed';
+    status: 'uploaded' | 'ocr_done' | 'extracting' | 'extracted' | 'extraction_failed' | 'needs_review' | 'auto_approved' | 'reviewed' | 'reviewed_approved' | 'reviewed_rejected';
     createdAt: Date;
     extractedFields?: {
         ownerName?: ExtractedFieldValue;

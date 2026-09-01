@@ -47,10 +47,8 @@ export default function LoginPage() {
       }
 
       // Redirect based on role from user_metadata
-      if (userRole === 'officer') {
-        router.push('/upload');
-      } else if (userRole === 'reviewer') {
-        router.push('/review');
+      if (userRole === 'officer' || userRole === 'reviewer') {
+        router.push('/dashboard');
       } else {
         setError(`Unknown role: ${userRole}`);
         setLoading(false);

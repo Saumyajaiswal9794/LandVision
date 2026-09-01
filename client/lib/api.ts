@@ -66,6 +66,28 @@ class ApiClient {
       body: JSON.stringify(updates),
     });
   }
+
+  // Sprint 3: List documents (role-filtered)
+  async listDocuments(statusFilter?: string): Promise<{ documents: any[] }> {
+    let endpoint = '/api/documents';
+    if (statusFilter) {
+      endpoint += `?status=${encodeURIComponent(statusFilter)}`;
+    }
+    return this.request(endpoint);
+  }
+
+  // Sprint 3: Get full document detail
+  async getDocumentDetail(id: string): Promise<any> {
+    return this.request(`/api/documents/${id}`);
+  }
+
+  // Sprint 3: Review document (reviewer-only)
+  async reviewDocument(id: string, body: { action: 'approve' | 'reject' | 'edit'; correctedFields?: Record<string, string>; reason?: string }): Promise<any> {
+    return this.request(`/api/documents/${id}/review`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  }
 }
 
 export const api = new ApiClient();

@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
-import { uploadDocument, getDocumentStatus, triggerExtraction } from '../controllers/documentsController';
+import { uploadDocument, getDocumentStatus, triggerExtraction, listDocuments, getDocumentDetail, reviewDocument } from '../controllers/documentsController';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 
@@ -46,11 +46,20 @@ const multerErrorHandler = (err: any, req: Request, res: Response, next: NextFun
   next();
 };
 
-// Secure document operations with auth middleware
-router.post('/upload', requireAuth, requireRole(['officer']), upload.single('file'), multerErrorHandler, uploadDocument);
-router.get('/:id/status', requireAuth, getDocumentStatus);
+// Sprint 3: List all documents (role-filtered) — MUST be before /:id routes
+router.get('/', requireAuth, listDocuments);
 
-// Sprint 2: AI extraction trigger (officers can trigger, reviewers can also view results)
+// Sprint 3: Get full document detail
+router.get('/:id', requireAuth, getDocumentDetail);
+
+// Sprint 3: Review action (reviewer-only)
+router.patch('/:id/review', requireAuth, requireRole(['reviewer']), reviewDocument);
+
+// Sprint 1: Upload document (officer-only)
+router.post('/upload', requireAuth, requireRole(['officer']), upload.single('file'), multerErrorHandler, uploadDocument);
+
+// Sprint 1-2: Legacy status and extraction routes
+router.get('/:id/status', requireAuth, getDocumentStatus);
 router.post('/:id/extract', requireAuth, triggerExtraction);
 
 export default router;

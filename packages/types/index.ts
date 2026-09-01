@@ -4,6 +4,7 @@
 export interface ExtractedFieldValue {
   value: string | null;
   confidence: number;
+  source?: string;
 }
 
 export interface LandRecord {
@@ -14,7 +15,7 @@ export interface LandRecord {
   uploadedBy: string;
   storagePath: string | null;   // Raw Supabase Storage object path (Sprint 2: for URL regeneration)
   storageUrl: string;           // Signed download URL (expires after 1 hour)
-  // Sprint 2: expanded status enum
+  // Sprint 2+3: expanded status enum
   status:
     | 'uploaded'
     | 'ocr_done'
@@ -23,7 +24,9 @@ export interface LandRecord {
     | 'extraction_failed'
     | 'needs_review'
     | 'auto_approved'
-    | 'reviewed';
+    | 'reviewed'
+    | 'reviewed_approved'
+    | 'reviewed_rejected';
   createdAt: Date;
 
   // Sprint 2: AI extraction fields

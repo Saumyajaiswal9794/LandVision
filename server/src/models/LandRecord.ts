@@ -77,7 +77,7 @@ const LandRecordSchema = new Schema<LandRecordDocument>(
     reviewedAt: { type: Date, default: null },
     gisPlotId: { type: String, default: null },
 
-    // Status: updated enum with Sprint 2 states
+    // Status: updated enum with Sprint 2 + Sprint 3 states
     status: {
       type: String,
       enum: [
@@ -87,6 +87,8 @@ const LandRecordSchema = new Schema<LandRecordDocument>(
         'extraction_failed',  // Sprint 2: extraction failed
         'needs_review',       // Sprint 2: low confidence or validation flags
         'auto_approved',      // Sprint 2: high confidence, no issues
+        'reviewed_approved',  // Sprint 3: reviewer approved (possibly after edits)
+        'reviewed_rejected',  // Sprint 3: reviewer rejected
       ],
       default: 'uploaded',
       index: true,
