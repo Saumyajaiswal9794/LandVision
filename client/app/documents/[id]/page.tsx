@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useEffect, useState, useCallback } from 'react';
+import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../../../components/card';
 import { Button } from '../../../components/button';
-import { ArrowLeft, Check, X, Save, AlertTriangle, Loader2, ShieldCheck, ShieldX, ImageOff } from 'lucide-react';
+import { ArrowLeft, Check, X, Save, AlertTriangle, Loader2, ShieldCheck, ShieldX, ImageOff, MapPin } from 'lucide-react';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
@@ -295,9 +296,17 @@ export default function DocumentDetailPage() {
             <p className="text-slate-500 text-sm mt-0.5">{doc.village}, {doc.district}</p>
           </div>
         </div>
-        <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${statusCfg.className}`}>
-          {statusCfg.label}
-        </span>
+        <div className="flex items-center gap-3">
+          {doc.village && (
+            <Link href={`/map?village=${encodeURIComponent(doc.village)}`} className="flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-700 hover:bg-brand-50 px-3 py-1.5 rounded-md transition-colors border border-brand-200">
+              <MapPin className="w-4 h-4" />
+              View on Map
+            </Link>
+          )}
+          <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${statusCfg.className}`}>
+            {statusCfg.label}
+          </span>
+        </div>
       </div>
 
       {/* Action message */}
