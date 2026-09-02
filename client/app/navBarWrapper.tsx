@@ -17,7 +17,7 @@ export const useNavContext = () => useContext(NavContext);
  */
 const PUBLIC_PATHS = ['/login', '/signup', '/'];
 
-export function NavBarWrapper({ children }: { children: React.ReactNode }) {
+export function NavBarWrapper({ children }: { children?: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [role, setRole] = useState<'officer' | 'reviewer' | null>(null);
@@ -43,8 +43,13 @@ export function NavBarWrapper({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // Capture in a local const so TS knows the closure below can't run after
+    // the value has been nulled (it can't — `supabase` is module-level and
+    // never reassigned, but TS's narrowing doesn't survive the closure).
+    const client = supabase;
+
     const getSession = async () => {
-      const { data, error } = await supabase.auth.getSession();
+      const { data, error } = await client.auth.getSession();
 
       if (error || !data.session) {
         setRole(null);
@@ -63,7 +68,7 @@ export function NavBarWrapper({ children }: { children: React.ReactNode }) {
     getSession();
 
     // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
       if (session) {
         const r = session.user?.user_metadata?.role as 'officer' | 'reviewer' | null;
         setRole(r);

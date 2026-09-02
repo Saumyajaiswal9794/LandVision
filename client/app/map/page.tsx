@@ -5,8 +5,9 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../../components/card';
 import { MapContainer, TileLayer, Polygon, Popup, useMap } from 'react-leaflet';
-import { Loader2, MapPin, Eye } from 'lucide-react';
+import { Loader2, MapPin, Eye, RefreshCw } from 'lucide-react';
 import 'leaflet/dist/leaflet.css';
+import { ApiErrorFallback } from '../../components/ErrorBoundary';
 
 // Fix Leaflet default icon issue in Next.js
 import L from 'leaflet';
@@ -171,8 +172,8 @@ function MapContent({ villageList, preselectedVillage }: { villageList: string[]
             </div>
 
             {error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-xs">
-                {error}
+              <div className="bg-red-50 border border-red-200 rounded text-xs p-0">
+                <ApiErrorFallback message={error} onRetry={() => selectedVillage && fetchVillagePlots(selectedVillage)} />
               </div>
             )}
 
@@ -285,12 +286,18 @@ export default function MapPage() {
         });
         if (!res.ok) return;
         const data = await res.json();
-        const villages = [...new Set((data.documents || []).map((d: any) => d.village).filter(Boolean))];
+        const docs: any[] = data.documents || [];
+        const villages = Array.from(
+          new Set(
+            docs
+              .map((d: any) => d.village as string)
+              .filter((v: string): v is string => typeof v === 'string' && v.length > 0),
+          ),
+        );
         setVillageList(villages.sort());
       } catch {
-        // Silently fail — village list is optional
-      } finally {
-        setLoadingVillages(false);
+        // Silently fail — village list is optional, the user can still type
+        // or pick from the seeded villages.
       }
     };
     fetchVillages();
