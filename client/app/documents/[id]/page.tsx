@@ -6,7 +6,8 @@ import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../../../components/card';
 import { Button } from '../../../components/button';
-import { ArrowLeft, Check, X, Save, AlertTriangle, Loader2, ShieldCheck, ShieldX, ImageOff, MapPin } from 'lucide-react';
+import { ArrowLeft, Check, X, Save, AlertTriangle, Loader2, ShieldCheck, ShieldX, ImageOff, MapPin, RefreshCw } from 'lucide-react';
+import { ApiErrorFallback } from '../../../components/ErrorBoundary';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
@@ -148,7 +149,15 @@ export default function DocumentDetailPage() {
       }
       setEditedFields(initial);
     } catch (err) {
-      setError((err as Error).message);
+      const e = err as Error;
+      const isNetwork =
+        e.message.includes('Failed to fetch') ||
+        e.message.includes('Network request failed') ||
+        e.message.toLowerCase().includes('network');
+      const friendly = isNetwork
+        ? 'Could not reach the LandVision backend to load this document. The service may be starting up (Render free tier cold start). Click retry to try again.'
+        : e.message;
+      setError(friendly);
     } finally {
       setLoading(false);
     }
@@ -274,7 +283,11 @@ export default function DocumentDetailPage() {
         <button onClick={() => router.push('/dashboard')} className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700">
           <ArrowLeft className="w-4 h-4" /> Back to Dashboard
         </button>
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm">{error}</div>
+        <Card>
+          <CardContent className="py-0">
+            <ApiErrorFallback message={error} onRetry={fetchDocument} />
+          </CardContent>
+        </Card>
       </div>
     );
   }

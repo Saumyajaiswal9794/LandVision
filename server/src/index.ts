@@ -1,7 +1,7 @@
 import 'dotenv/config';
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
-import { env } from './config/env';
+import { env, getAllowedOrigins } from './config/env';
 import { connectMongoDB, connectPostgres } from './config/db';
 import errorHandler from './middleware/errorHandler';
 
@@ -14,11 +14,28 @@ import gisRoutes from './routes/gis';
 
 const app = express();
 
-// Middlewares
-app.use(cors());
+// --- CORS --------------------------------------------------------------------
+// Allow only the configured frontend origins (env.CLIENT_ORIGIN).
+// In production this MUST be the deployed Vercel URL — never "*" and never a
+// hardcoded localhost.
+const corsOptions: cors.CorsOptions = {
+  origin(origin, callback) {
+    const allowed = getAllowedOrigins();
+    // Allow same-origin / curl / Postman requests that omit the Origin header.
+    if (!origin || allowed.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS blocked origin: ${origin}`));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 
-// Routes Binding
+// --- Routes ------------------------------------------------------------------
 app.use('/api/documents', documentRoutes);
 app.use('/api/records', recordRoutes);
 app.use('/api/auth', authRoutes);
@@ -30,10 +47,23 @@ app.get('/health', (_req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Global Error Handler
-app.use(errorHandler);
+// --- 404 handler for unknown routes -----------------------------------------
+// Putting this before the global error handler ensures unmatched URLs return a
+// clean JSON 404 instead of falling through to the catch-all error middleware
+// with a misleading 500.
+app.use((_req: Request, res: Response) => {
+  res.status(404).json({ success: false, error: 'Resource not found' });
+});
 
-// Database connection & Server Boot
+// --- Global Error Handler ----------------------------------------------------
+// Catches any unhandled error from routes/controllers, logs it, and returns a
+// generic JSON response. In production the stack trace is NEVER leaked to the
+// client — only a sanitized `Internal Server Error` message is returned.
+app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+  errorHandler(err, _req, res, _next);
+});
+
+// --- Database connection & Server Boot ---------------------------------------
 const bootstrap = async () => {
   try {
     // Only connect in non-test modes
@@ -42,8 +72,11 @@ const bootstrap = async () => {
       await connectPostgres();
     }
 
-    app.listen(env.PORT, () => {
-      console.log(`[Server] LandVision backend API running on port ${env.PORT}`);
+    // Render assigns PORT dynamically — always read env.PORT, never a hardcoded value.
+    const port = env.PORT;
+    app.listen(port, () => {
+      console.log(`[Server] LandVision backend API running on port ${port}`);
+      console.log(`[Server] CORS allowed origins: ${getAllowedOrigins().join(', ')}`);
     });
   } catch (error) {
     console.error('Bootstrap failure:', error);

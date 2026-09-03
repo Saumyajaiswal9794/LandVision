@@ -1,5 +1,30 @@
 node_modules/
 .next/
-.env
-
 .turbo/
+*.tsbuildinfo
+
+# Env files — NEVER commit real secrets.
+# Only the `.example` and `.env.example` variants are tracked.
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+client/.env
+client/.env.local
+client/.env.production
+client/.env.*.local
+server/.env
+server/.env.production
+server/.env.staging
+
+# Build output
+server/dist/
+packages/types/dist/
+
+# OS / editor noise
+.DS_Store
+*.log
+npm-debug.log*
+.vscode/
+.idea/

@@ -1,0 +1,48 @@
+# =============================================================================
+# Render Blueprint — LandVision backend (Express + Mongoose + pg/PostGIS)
+# =============================================================================
+# Deploy with one of:
+#   1. Render dashboard → New → Blueprint → connect this repo → apply.
+#   2. CLI: `render blueprint apply` (requires the Render CLI installed).
+#
+# Render reads this file to provision the backend Web Service and its
+# environment variables. The values in `envVars` below are KEY-ONLY — you must
+# fill them in via the Render dashboard (or `render secrets set`) because they
+# are secrets that MUST NOT be checked into git.
+# =============================================================================
+
+services:
+  - type: web
+    name: landvision-api
+    runtime: node
+    plan: free            # bump to `starter` for production traffic
+    region: oregon        # change to match your frontend region for lower latency
+    branch: main
+    rootDir: server       # this repo is a monorepo — deploy from /server
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Render sets PORT dynamically — do NOT hardcode it here. The app reads
+      # process.env.PORT at boot.
+      - key: CLIENT_ORIGIN
+        sync: false   # SET IN DASHBOARD: your deployed Vercel URL, e.g. https://landvision.vercel.app
+      - key: MONGODB_URI
+        sync: false   # SET IN DASHBOARD: MongoDB Atlas connection string
+      - key: SUPABASE_URL
+        sync: false   # SET IN DASHBOARD: https://YOUR-PROJECT.supabase.co
+      - key: SUPABASE_ANON_KEY
+        sync: false   # SET IN DASHBOARD
+      - key: SUPABASE_SERVICE_KEY
+        sync: false   # SET IN DASHBOARD: service-role key (server-only)
+      - key: PG_CONNECTION_STRING
+        sync: false   # SET IN DASHBOARD: Render Postgres / Supabase Postgres w/ PostGIS
+      - key: GEMINI_API_KEY
+        sync: false   # SET IN DASHBOARD: Google AI Studio key
+      - key: CONFIDENCE_THRESHOLD
+        value: "0.75"
+      - key: VILLAGE_AREA_LIMIT_HECTARES
+        value: "500"

@@ -7,6 +7,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { Card, CardHeader, CardTitle, CardContent } from '../../components/card';
 import { Button } from '../../components/button';
 import { FileText, Filter, RefreshCw, Eye, UploadCloud } from 'lucide-react';
+import { ApiErrorFallback } from '../../components/ErrorBoundary';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
@@ -83,7 +84,17 @@ function DashboardContent() {
       const data = await res.json();
       setDocuments(data.documents || []);
     } catch (err) {
-      setError((err as Error).message);
+      // Distinguish network failures (CORS, backend down, no internet) from
+      // server errors so the fallback message is actually useful.
+      const e = err as Error;
+      const isNetwork =
+        e.message.includes('Failed to fetch') ||
+        e.message.includes('Network request failed') ||
+        e.message.toLowerCase().includes('network');
+      const friendly = isNetwork
+        ? 'Could not reach the LandVision backend. The service may be starting up (Render free tier cold start) or your network may be down. Click retry to try again.'
+        : e.message;
+      setError(friendly);
     } finally {
       setLoading(false);
     }
@@ -161,10 +172,12 @@ function DashboardContent() {
         </div>
       )}
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm">
-          {error}
-        </div>
+      {error && !loading && (
+        <Card>
+          <CardContent className="py-0">
+            <ApiErrorFallback message={error} onRetry={() => fetchDocuments(statusFilter)} />
+          </CardContent>
+        </Card>
       )}
 
       {loading && !documents.length ? (

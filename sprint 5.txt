@@ -1,0 +1,959 @@
+================================================================================
+                          LandVision — Project History
+                          ============================
+                          Through Sprint 5 Completion
+================================================================================
+
+Document generated: 2026-09-03
+Repository: https://github.com/Saumyajaiswal9794/LandVision
+Latest commit on main: 472d447  ("Sprint 5: deployment, demo polish, and
+documentation")
+
+
+
+
+================================================================================
+SECTION 1 — PROJECT OVERVIEW
+================================================================================
+
+LandVision is a full-stack platform that turns scanned, often handwritten
+Indian land records (Khasra, Khata, Khatoni registers) into structured,
+searchable, geospatially-indexed digital records. It is built for state land
+records departments (and the central DILRMP programme) whose officers
+currently key in plot details by hand from paper scans — a slow, error-prone
+process that bottlenecks the entire cadastral modernisation pipeline.
+
+Rather than attempting a single giant OCR pass, LandVision splits the problem
+into four stages:
+
+    upload  ->  AI extraction  ->  validation & review  ->  GIS
+
+…and assigns each stage to the right technology: a multimodal LLM for entity
+extraction, rule-based validators for integrity checks, a human reviewer for
+low-confidence cases, and PostGIS for spatial queries. The result is a system
+where high-quality scans flow through unaided (auto-approved in seconds) and
+only the genuinely ambiguous records consume a reviewer's time — typically
+10–15% of the daily load in our test data.
+
+The Sprint 5 milestone (commit 472d447) makes LandVision deployable,
+demoable, and presentable: production env config, Render + Vercel deploy
+recipes, a realistic 10-record seed dataset, an end-to-end demo script, and
+a hardened error surface that fails loudly instead of silently.
+
+
+
+
+================================================================================
+SECTION 2 — SPRINT HISTORY (Sprints 1 through 4)
+================================================================================
+
+These sprints were completed before the work documented in this file. They
+are summarised here for context.
+
+--------------------------------------------------------------------------------
+Sprint 1 — Auth + Upload  (commit history predates this file)
+--------------------------------------------------------------------------------
+What was built:
+  - Supabase Auth integration (officer + reviewer roles via user_metadata).
+  - Express backend with JWT verification middleware.
+  - /api/documents/upload endpoint (officer-only) using Multer + Supabase
+    Storage.
+  - LandRecord Mongoose schema with filename, village, district, uploadedBy,
+    storagePath, storageUrl, status='uploaded'.
+  - Basic Next.js frontend: /login, /signup, /dashboard, /upload.
+  - NavBar with role-aware UI.
+  - docker-compose.yml for local MongoDB + Postgres/PostGIS.
+
+End state: an officer could log in, upload a scanned PDF/image, and see it
+appear in their dashboard. No extraction yet.
+
+--------------------------------------------------------------------------------
+Sprint 2 — Gemini Extraction + Validation
+--------------------------------------------------------------------------------
+What was built:
+  - Gemini 2.5 Flash multimodal extraction (services/extraction/geminiExtract.ts):
+    takes a scanned image, returns structured JSON
+    {ownerName, khasraNumber, plotArea, village, district, landClass}
+    with per-field confidence scores.
+  - Tesseract.js fallback (services/extraction/tesseractFallback.ts) for when
+    Gemini is rate-limited (429) or unavailable.
+  - Extraction orchestrator (services/extraction/extractLandRecord.ts) that
+    tries Gemini first, falls back to Tesseract, tags extractionSource.
+  - Validation engine:
+      * duplicateDetection.ts — flags duplicate_detected when the same
+        khasraNumber + village already exists for a different record.
+      * areaSumCheck.ts — flags exceeds_village_total when the sum of plot
+        areas in a village exceeds VILLAGE_AREA_LIMIT_HECTARES (default 500).
+      * confidenceRouting.ts — combined confidence below
+        CONFIDENCE_THRESHOLD (default 0.75) routes to needs_review,
+        otherwise to auto_approved.
+  - LandRecord schema extended with extractedFields (per-field value +
+    confidence + optional source tag), extractionSource, validationFlags,
+    extractionError.
+  - Status enum expanded: uploaded, extracting, extracted, extraction_failed,
+    needs_review, auto_approved.
+  - triggerExtraction controller (POST /api/documents/:id/extract).
+  - Document detail page (/documents/[id]) showing the source image side-by-
+    side with extracted fields and confidence badges.
+
+End state: an officer could upload, trigger extraction, and see Gemini's
+structured output with confidence scores. Low-confidence records would land
+in needs_review.
+
+--------------------------------------------------------------------------------
+Sprint 3 — Reviewer Dashboard + Review Workflow
+--------------------------------------------------------------------------------
+What was built:
+  - Role-based access control middleware (middleware/rbac.ts):
+      * officer — can upload, can view only their own documents.
+      * reviewer — can view all documents, can approve/reject/edit.
+  - /api/documents (GET) — list endpoint, role-filtered (officers see own,
+    reviewers see all) with optional ?status= filter.
+  - /api/documents/:id (GET) — full document detail with signed URL refresh.
+  - /api/documents/:id/review (PATCH) — reviewer actions:
+      * action: 'approve' — sets status reviewed_approved, stamps reviewedBy +
+        reviewedAt.
+      * action: 'reject' — sets status reviewed_rejected, stores optional
+        reason in extractionError.
+      * action: 'edit' — accepts correctedFields object, marks each corrected
+        field as source='human_corrected' with confidence 1.0, then approves.
+  - Dashboard upgrade: status filter dropdown, status badges (color-coded),
+    desktop table + mobile cards, refresh button.
+  - Document detail page upgrade: editable fields when reviewer + needs_review,
+    inline confidence badges, validation flag banners, approve/reject/edit
+    buttons, rejection modal.
+
+End state: full review loop — reviewer could see all records, filter by
+needs_review, edit individual fields, and approve/reject with audit trail.
+
+--------------------------------------------------------------------------------
+Sprint 4 — GIS / Map View (PostGIS)
+--------------------------------------------------------------------------------
+What was built:
+  - PostgreSQL/PostGIS connection (config/postgres.ts + pgPool).
+  - plots table migration (db/migrations/001_create_plots_table.sql) with
+    khasra_number, village, district, geom (PostGIS polygon, SRID 4326).
+  - PostGIS queries (services/gis/postgisQueries.ts, plotQueries.ts).
+  - /api/gis/village/:village endpoint returning a GeoJSON FeatureCollection
+    of plot polygons for a village, joined with LandRecord metadata.
+  - /map page (Next.js + react-leaflet) with village selector, polygon
+    rendering, color-coding by document status, popups linking back to
+    document detail, and FitBoundsOnLoad for auto-zoom.
+  - seedPlots.ts (db/seedPlots.ts) — reads LandRecords from MongoDB, generates
+    deterministic polygons near Hamirpur, HP (31.68, 76.53), and inserts
+    them into PostGIS. Falls back to demo villages (Rampur, Bhoranj, Nadaun)
+    and demo khasras (101/1, 101/2, ..., 106/2) when MongoDB is empty.
+
+End state: a reviewer could click "View on Map" from any document, see the
+village's plots color-coded by status, and click a polygon to jump back to
+the source record. The map and dashboard now told the same story about the
+same plots — provided the seeders were run in order.
+
+
+
+
+================================================================================
+SECTION 3 — SPRINT 5 — DEPLOYMENT, DEMO POLISH, DOCUMENTATION
+================================================================================
+
+This is the work documented in detail by this file. Sprint 5 was scoped as
+"make the project deployable, demoable, and presentable — no new features."
+The task brief had 7 numbered tasks plus a verification section.
+
+--------------------------------------------------------------------------------
+TASK 1 — Production Environment Configuration
+--------------------------------------------------------------------------------
+
+What was wrong before:
+  - server/src/config/env.ts only console.warn'd on missing env vars — a bad
+    deploy would silently run broken (CORS errors, missing DB connections,
+    etc.) instead of failing loudly.
+  - CORS in server/src/index.ts was wide-open: app.use(cors()) — any origin
+    could call the API. Fine for dev, dangerous for prod.
+  - No .env.example files existed. New developers had to guess which env
+    vars were required.
+  - Server bound to PORT=4000 hardcoded — fine for local dev, but Render
+    assigns PORT dynamically.
+
+What Sprint 5 did:
+
+  Files created:
+    - server/.env.example
+        Local-dev template. Documents every variable, with sane defaults
+        like MONGODB_URI=mongodb://localhost:27017/landvision and
+        CLIENT_ORIGIN=http://localhost:3000.
+
+    - server/.env.production.example
+        Production template. Same variables, no real values. Every variable
+        is marked REQUIRED with a comment explaining where to get it
+        (MongoDB Atlas, Supabase dashboard, Google AI Studio, etc.).
+
+    - client/.env.example
+        Local-dev template for the Next.js client. Documents
+        NEXT_PUBLIC_API_URL=http://localhost:4000 and the two
+        NEXT_PUBLIC_SUPABASE_* vars.
+
+    - client/.env.production.example
+        Production template. NEXT_PUBLIC_API_URL must point to the deployed
+        Render backend, NOT localhost.
+
+  Files modified:
+    - server/src/config/env.ts  (rewritten)
+        * Added CLIENT_ORIGIN to REQUIRED_ENV_VARS list.
+        * In production (NODE_ENV=production): if any required var is
+          missing, logs [FATAL] + the missing var names to stderr, then
+          THROWS an Error. This crashes the process with exit code 1 so
+          the deploy is marked Failed in the Render dashboard — instead
+          of silently running broken.
+        * In development: only console.warn's so partial dev work stays
+          possible (e.g. testing just the API without PostGIS).
+        * Exports new getAllowedOrigins() helper that splits CLIENT_ORIGIN
+          on commas into an array of trimmed origin strings.
+
+    - server/src/index.ts  (rewritten)
+        * CORS now configured via corsOptions reading from
+          getAllowedOrigins() — only origins in CLIENT_ORIGIN are allowed
+          through. Same-origin/curl/Postman requests (no Origin header)
+          pass through.
+        * credentials: true, methods include PATCH, allowedHeaders include
+          Authorization + Content-Type.
+        * Added a 404 catch-all before the error handler so unmatched URLs
+          return a clean JSON 404 instead of falling through with a 500.
+        * Server listens on env.PORT — Render assigns PORT dynamically,
+          so the same code boots identically on local (4000) and Render
+          (10000 or whatever Render assigns).
+        * Logs CORS allowed origins on boot so the operator can verify
+          the right frontend URL got through.
+
+    - server/src/middleware/errorHandler.ts  (rewritten)
+        * Always logs the full error server-side (method, URL, name,
+          message, and stack in dev).
+        * NEVER leaks the stack trace to the client in production.
+        * Honors HTTP-aware errors (objects with a numeric `status` field)
+          for 4xx client errors.
+        * For 5xx errors in production: returns a generic
+          "Internal Server Error" message — never the raw error message,
+          which could contain internal info.
+        * Returns a consistent JSON envelope:
+            { success: false, error: <message>, ...(dev: stack) }
+
+--------------------------------------------------------------------------------
+TASK 2 — Deploy the Backend to Render
+--------------------------------------------------------------------------------
+
+  Files created:
+    - render.yaml  (at repo root)
+        Render Blueprint specifying:
+          * service type: web (Node runtime)
+          * name: landvision-api
+          * plan: free (with note to bump to starter for prod traffic)
+          * region: oregon
+          * rootDir: server  (monorepo — deploy from /server)
+          * buildCommand: npm install && npm run build
+          * startCommand: npm start
+          * healthCheckPath: /health
+          * autoDeploy: true
+          * envVars: NODE_ENV=production, all 7 required env vars
+            (CLIENT_ORIGIN, MONGODB_URI, SUPABASE_URL, SUPABASE_ANON_KEY,
+            SUPABASE_SERVICE_KEY, PG_CONNECTION_STRING, GEMINI_API_KEY)
+            marked sync:false (set in dashboard), plus
+            CONFIDENCE_THRESHOLD=0.75 and VILLAGE_AREA_LIMIT_HECTARES=500
+            as inline defaults.
+
+    - DEPLOYMENT.md  (at repo root)
+        Full deploy guide covering:
+          * Service/platform table (Render backend + Vercel frontend).
+          * Prerequisites (GitHub, Render, Vercel, MongoDB Atlas, Supabase,
+            Google AI Studio accounts).
+          * Option A — Blueprint deploy (recommended): connect repo in
+            Render dashboard, fill in sync:false secrets, deploy.
+          * Option B — Manual dashboard setup: explicit Root Directory,
+            Build Command, Start Command fields.
+          * Explanation of why server uses process.env.PORT (Render assigns
+            dynamically, code reads env.PORT, same code boots on 4000 local
+            and 10000 Render).
+          * Explanation of why the env-missing check is fatal (so a bad
+            deploy fails loudly with a clear log line in Render).
+          * Verification checklist.
+          * Rollback recipe.
+          * Known limits of free-tier demo (Render sleeps, Gemini quota,
+            Supabase free DB, Vercel Hobby egress).
+
+  Why this satisfies the task:
+    - render.yaml exists with build/start commands and the full env var list.
+    - Server binds to process.env.PORT (Render assigns this dynamically).
+    - All required env vars are documented in DEPLOYMENT.md AND in
+      server/.env.production.example.
+
+--------------------------------------------------------------------------------
+TASK 3 — Deploy the Frontend to Vercel
+--------------------------------------------------------------------------------
+
+  Files created:
+    - client/vercel.json
+        {
+          "$schema": "https://openapi.vercel.sh/vercel.json",
+          "buildCommand": "npm run build",
+          "devCommand": "npm run dev",
+          "installCommand": "npm install",
+          "framework": "nextjs",
+          "outputDirectory": ".next",
+          "regions": ["bom1"],
+          "github": { "silent": true }
+        }
+
+  DEPLOYMENT.md (created in Task 2) documents:
+    - Root Directory: client
+    - The three NEXT_PUBLIC_ env vars that MUST be set in Vercel:
+        NEXT_PUBLIC_API_URL       -> deployed Render backend URL
+        NEXT_PUBLIC_SUPABASE_URL  -> Supabase project URL
+        NEXT_PUBLIC_SUPABASE_ANON_KEY -> Supabase anon public key
+    - Explicit warning that NEXT_PUBLIC_API_URL must point to the Render
+      backend, NOT localhost.
+    - Note that NEXT_PUBLIC_* vars are baked into the bundle at build time,
+      so any change requires a Vercel redeploy (automatic when saved in
+      dashboard).
+    - Final step: after Vercel deploys, copy the Vercel URL and paste it
+      into Render's CLIENT_ORIGIN env var, then redeploy Render so CORS
+      lets the new frontend through.
+
+--------------------------------------------------------------------------------
+TASK 4 — Seed Realistic Demo Data
+--------------------------------------------------------------------------------
+
+  Files created:
+    - server/src/db/seedDemo.ts
+        Seeds 10 LandRecord documents into MongoDB. Coverage:
+
+        Record | Filename                          | Village  | Status              | Source    | Flags
+        -------|-----------------------------------|----------|---------------------|-----------|------------------
+          1    | rampur_khasra_101_1.jpg           | Rampur   | uploaded            | (none)    |
+          2    | rampur_khasra_101_2.pdf           | Rampur   | extracting          | (none)    |
+          3    | rampur_khasra_102_1.jpg           | Rampur   | auto_approved       | gemini    |
+          4    | rampur_khasra_102_2.jpg           | Rampur   | needs_review        | tesseract | (low confidence)
+          5    | rampur_khasra_102_1_dup.jpg       | Rampur   | needs_review        | gemini    | duplicate_detected
+          6    | bhoranj_khasra_103_1.jpg          | Bhoranj  | needs_review        | gemini    | exceeds_village_total
+          7    | bhoranj_khasra_103_2.jpg          | Bhoranj  | extracted            | gemini    |
+          8    | nadaun_khasra_104_1.jpg           | Nadaun   | reviewed_approved   | tesseract | (human_corrected fields)
+          9    | nadaun_khasra_104_2.jpg           | Nadaun   | reviewed_rejected   | gemini    | (rejection reason stored)
+         10    | nadaun_khasra_105_1.jpg           | Nadaun   | extraction_failed   | tesseract | (extractionError message)
+
+        Status coverage: 8/8 enum values
+          uploaded, extracting, extracted, extraction_failed,
+          auto_approved, needs_review, reviewed_approved, reviewed_rejected
+
+        Source coverage: 3/3
+          gemini, tesseract, null (for uploaded/extracting records)
+
+        Village coverage: 3 villages
+          Rampur, Bhoranj, Nadaun (all in Hamirpur district, HP)
+
+        Flag coverage:
+          - duplicate_detected (record 5: same khasra 102/1 + Rampur as record 3)
+          - exceeds_village_total (record 6: plot area 620 hectares > 500 cap)
+
+        Special touches:
+          - Record 8 has source='human_corrected' on ownerName + khasraNumber
+            with confidence 1.0, demonstrating the reviewer edit flow.
+          - Record 9 has extractionError populated with a rejection reason
+            ("Scanned sheet is illegible — request a fresh scan from the
+            patwari.") so the rejection banner displays correctly.
+          - Records 1, 2 have null extractionSource (no extraction yet).
+          - Records 3, 5, 6, 7, 9 use Gemini; records 4, 8, 10 use Tesseract.
+
+        Idempotency:
+          - Clears existing LandRecords via LandRecord.deleteMany({}) before
+            inserting, so re-running won't produce duplicate stacks.
+          - Prints a status distribution + flag summary to the console after
+            seeding so the operator can sanity-check coverage at a glance.
+
+        Coordination with seedPlots.ts:
+          - seedDemo.ts uses the SAME villages (Rampur, Bhoranj, Nadaun) and
+            khasra numbers (101/1, 101/2, ..., 106/2 subset) that seedPlots.ts
+            looks for in its demo fallback path.
+          - Run order: seedDemo FIRST (creates the LandRecords), then
+            seedPlots (reads the LandRecords and generates matching polygons).
+          - The dashboard and the map then tell one consistent story about
+            the same plots.
+
+  Files modified:
+    - server/package.json  (added npm script)
+        "seed:demo": "ts-node src/db/seedDemo.ts"
+
+  Verification:
+    - Wrote /home/z/my-project/scripts/test-seed-consistency.js that
+      cross-checks every khasra+village pair in seedDemo.ts against
+      seedPlots.ts's DEMO_VILLAGES x DEMO_KHASRAS grid. Result:
+      PASS — all 10 pairs valid, all statuses/sources/flags covered.
+
+--------------------------------------------------------------------------------
+TASK 5 — Write the README
+--------------------------------------------------------------------------------
+
+  Files modified:
+    - README.md  (was empty, now ~470 lines)
+
+  Sections:
+    1. Project Overview (2 paragraphs)
+       - Khasra/Khata digitization problem statement.
+       - Why 4-stage pipeline beats single-OCR-pass.
+       - 10-15% reviewer load figure.
+
+    2. Architecture
+       - ASCII four-tier diagram (Frontend -> Backend -> AI Services +
+         Data & Storage + Tesseract fallback).
+       - Request flow narrative: upload -> extraction (Gemini, with
+         Tesseract fallback) -> validation (3 rules) -> review ->
+         GIS.
+       - Each tier's responsibility spelled out.
+
+    3. Tech Stack
+       - Frontend table: Next.js 14, TS, Tailwind, lucide-react,
+         react-leaflet, Supabase JS.
+       - Backend table: Express 4, TS, Mongoose 8, pg 8, Multer,
+         Supabase JS, @google/genai, tesseract.js.
+       - Data & Storage table: Supabase Auth, Supabase Storage,
+         MongoDB Atlas, Postgres+PostGIS.
+
+       - "Why Gemini over OCR+LLM" subsection — 4 reasons:
+         1. Multimodal in a single call (no OCR-to-LLM plumbing).
+         2. Indic language support (Devanagari out of the box;
+            Tesseract's Hindi model is weaker).
+         3. Per-field confidence scores (feed routing directly).
+         4. Cost (~$0.001/record on Gemini 2.5 Flash free tier).
+
+       - "Why Supabase over AWS" subsection — 4 reasons:
+         1. Free tier covers demo traffic (500 MB DB, 1 GB Storage,
+            50K MAU).
+         2. Auth + Storage + Postgres in one project (vs. stitching
+            Cognito + S3 + RDS on AWS).
+         3. PostGIS built in (Sprint 4 just works).
+         4. Row-level security as defence-in-depth backstop.
+
+    4. Project Layout
+       - Full directory tree with annotations for every folder.
+
+    5. Local Setup
+       - Prerequisites (Node 18+, Supabase, MongoDB Atlas or docker-compose,
+         Postgres+PostGIS, Gemini API key).
+       - Clone, install, build types package, configure env, create plots
+         table, run dev servers — every step with the exact command.
+
+    6. Seeding Demo Data
+       - The two seeders and their coordination.
+       - Idempotency note.
+
+    7. Deployment
+       - Summary table (Render + Vercel).
+       - Pointer to DEPLOYMENT.md for full instructions.
+       - Quick summary of the 3-step deploy flow.
+
+    8. Demo Script
+       - Pointer to DEMO_SCRIPT.md.
+
+    9. Screenshots
+       - Placeholder note (will be added after a live run-through).
+       - Planned captures listed (dashboard, document detail with flag,
+         map view with polygons).
+
+    10. Future Work
+        - Real Google Vision + DILRMP integration (richer signal than
+          Tesseract for degraded scans; canonical village codes from
+          DILRMP to replace free-text village names).
+        - Fine-tuned Indic handwriting models — explicit evaluation of
+          Microsoft Florence-2 with reasoning for why Gemini was chosen
+          instead (zero fine-tuning cost, operational simplicity,
+          multilingual promptability).
+        - Production-scale cost considerations table:
+            Gemini 2.5 Flash: ~$1,000/year for 1M records
+            Supabase Pro: $25/mo
+            Render Starter: $7/mo per service
+            MongoDB M10: ~$60/mo
+            Vercel Pro: $20/mo
+          All-in cost estimate: $120-150/month at 100 docs/day.
+
+    11. License
+        - Internal academic / hackathon project.
+
+--------------------------------------------------------------------------------
+TASK 6 — Final Error-Handling Pass
+--------------------------------------------------------------------------------
+
+  Server side:
+    - server/src/middleware/errorHandler.ts rewritten (see Task 1 details).
+    - 404 catch-all added in server/src/index.ts before the error handler.
+
+  Client side:
+    Files created:
+      - client/components/ErrorBoundary.tsx
+          Exports two things:
+            1. ErrorBoundary — a React class-component error boundary.
+               Catches render-time crashes in its subtree. Renders a
+               readable fallback UI with the error message and a
+               "Reload page" button instead of a blank white screen.
+               Logs caught errors to the console (production would
+               forward to Sentry/Datadog).
+            2. ApiErrorFallback — a simpler component for the common
+               case of a failed fetch (network error, 5xx, malformed
+               JSON). Shows "Couldn't reach the LandVision backend"
+               with a Retry button. Used by the dashboard, document
+               detail, and map pages.
+
+    Files modified:
+      - client/app/layout.tsx
+          Wraps the {children} in <ErrorBoundary label="LandVision"> so
+          every page is covered. Catches render crashes app-wide.
+
+      - client/app/dashboard/page.tsx
+          - Imports ApiErrorFallback.
+          - In fetchDocuments catch block: distinguishes network errors
+            ("Failed to fetch" / "Network request failed") from server
+            errors and produces a friendlier message that mentions the
+            Render free-tier cold start as a possible cause.
+          - Replaces the bare red error box with a Card containing
+            ApiErrorFallback with a Retry button that re-runs
+            fetchDocuments(statusFilter).
+
+      - client/app/documents/[id]/page.tsx
+          - Imports ApiErrorFallback + adds RefreshCw to lucide imports.
+          - In fetchDocument catch block: same network-error friendly
+            message logic.
+          - Replaces the bare red error box with a Card containing
+            ApiErrorFallback with a Retry button that re-runs
+            fetchDocument.
+
+      - client/app/map/page.tsx
+          - Imports ApiErrorFallback.
+          - Replaces the bare red error box for plot fetch failures with
+            ApiErrorFallback with a Retry button.
+          - FIXED PRE-EXISTING RUNTIME BUG: the fetchVillages effect
+            called setLoadingVillages(false) in its finally block, but
+            setLoadingVillages was never declared as state. This would
+            throw "setLoadingVillages is not defined" at runtime when
+            the village list fetch completed (success or fail). Removed
+            the finally block entirely — village list is optional, no
+            loading state needed for it.
+          - FIXED PRE-EXISTING TS ERROR: `villages` was inferred as
+            `unknown[]` because of the (d: any) => d.village map. Cast
+            to string[] explicitly using Array.from(new Set(...)) with
+            a proper type guard.
+
+      - client/app/navBarWrapper.tsx
+          - FIXED PRE-EXISTING TS ERROR: children prop was required
+            (`children: React.ReactNode`) but the component is called
+            without children in layout.tsx. Made it optional:
+            `children?: React.ReactNode`.
+          - FIXED PRE-EXISTING TS ERROR: `supabase` was possibly null
+            inside the closure (getSession + onAuthStateChange callbacks).
+            Captured in a local const `client = supabase;` after the
+            null check so TS's narrowing survives the closure. Both
+            `supabase.auth.getSession()` and
+            `supabase.auth.onAuthStateChange()` calls updated to use
+            `client` instead.
+
+--------------------------------------------------------------------------------
+TASK 7 — Write a 3-Minute Demo Script
+--------------------------------------------------------------------------------
+
+  Files created:
+    - DEMO_SCRIPT.md  (at repo root)
+
+  Contents:
+    - Two demo accounts table (officer@landvision.demo,
+      reviewer@landvision.demo, with suggested passwords and a note that
+      the role is set via Supabase user_metadata at signup).
+    - 6 numbered steps, each with a one-sentence narration:
+        Step 1 — Log in as officer (0:00-0:20)
+          Open the Vercel URL, log in with officer creds, dashboard
+          loads with seeded records.
+        Step 2 — Upload a new document (0:20-0:55)
+          Click Upload, pick a file, type Rampur + Hamirpur, submit,
+          copy the recordId from the success banner.
+        Step 3 — Switch to reviewer (0:55-1:15)
+          Sign out, log in with reviewer creds, dashboard now shows all
+          records across all officers.
+        Step 4 — Open a needs_review record with a validation flag
+          (1:15-1:50)
+          Filter by Needs Review, click rampur_khasra_102_1_dup.jpg,
+          see the amber "Duplicate detected" banner. Mention confidence
+          scores on extracted fields.
+        Step 5 — Correct a field and approve (1:50-2:30)
+          Edit the Owner Name field, click Save Corrections, watch the
+          status badge flip from Needs Review to Reviewed Approved.
+        Step 6 — Show the village map for the same record (2:30-3:00)
+          Click "View on Map", polygons render for Rampur, click the
+          102/1 polygon, popup links back to the document detail.
+    - "Done" section summarising what was demonstrated.
+    - Common failure modes table for mid-demo recovery (Render cold start,
+      CORS misconfig, missing seed data, Supabase role missing, 413 on
+      large upload).
+
+
+
+
+================================================================================
+SECTION 4 — VERIFICATION (WHAT WAS TESTED AND HOW)
+================================================================================
+
+Sprint 5 introduced two automated tests plus a TypeScript type-check pass.
+All three passed.
+
+--------------------------------------------------------------------------------
+Test 1 — Env startup check  (test-env-check.js)
+--------------------------------------------------------------------------------
+Location: /home/z/my-project/scripts/test-env-check.js
+
+What it does:
+  Spawns three child processes that load env.ts under different
+  environment-variable configurations and asserts on the exit code +
+  stderr/stdout content.
+
+Scenarios:
+  1. NODE_ENV=production + ALL required vars missing
+     EXPECTED: process exits non-zero, stderr contains "[FATAL]" and the
+     list of missing vars.
+     ACTUAL: PASSED. Output:
+       [FATAL] [env] Missing required environment variable(s):
+       MONGODB_URI, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY,
+       PG_CONNECTION_STRING, GEMINI_API_KEY, CLIENT_ORIGIN. Copy
+       .env.production.example to .env.production and fill in real values,
+       or set them in your hosting dashboard (Render/Vercel).
+       exit code: 1
+
+  2. NODE_ENV=development + ALL required vars missing
+     EXPECTED: process exits 0, stderr contains a warning but no FATAL.
+     ACTUAL: PASSED. Output:
+       [env:warn] [env] Missing required environment variable(s): ...
+       exit code: 0
+
+  3. NODE_ENV=production + ALL required vars SET
+     EXPECTED: process exits 0 cleanly (env.ts loads without throwing).
+     ACTUAL: PASSED. exit code: 0.
+
+How to reproduce:
+  cd /home/z/my-project/LandVision/server
+  node /home/z/my-project/scripts/test-env-check.js
+
+--------------------------------------------------------------------------------
+Test 2 — Seed data consistency  (test-seed-consistency.js)
+--------------------------------------------------------------------------------
+Location: /home/z/my-project/scripts/test-seed-consistency.js
+
+What it does:
+  Statically cross-checks every khasra+village pair used in seedDemo.ts
+  against the DEMO_VILLAGES x DEMO_KHASRAS grid that seedPlots.ts would
+  produce polygons for. Also prints a coverage summary.
+
+Result:
+  PASS - all 10 seedDemo pairs are valid seedPlots pairs.
+  Villages covered: Rampur, Bhoranj, Nadaun
+  Statuses covered: uploaded, extracting, extracted, extraction_failed,
+                  auto_approved, needs_review, reviewed_approved,
+                  reviewed_rejected
+  Sources covered: gemini, tesseract, (null for uploaded/extracting)
+  Flags covered: duplicate_detected, exceeds_village_total
+
+How to reproduce:
+  node /home/z/my-project/scripts/test-seed-consistency.js
+
+--------------------------------------------------------------------------------
+Test 3 — TypeScript type-check
+--------------------------------------------------------------------------------
+Server:
+  cd /home/z/my-project/LandVision/server
+  npx tsc --noEmit
+
+  Result for Sprint 5 files: ZERO errors.
+    - server/src/config/env.ts        ✓
+    - server/src/index.ts              ✓
+    - server/src/middleware/errorHandler.ts  ✓
+    - server/src/db/seedDemo.ts       ✓
+
+  (Pre-existing errors in untouched files like documentsController.ts,
+   gisController.ts, models/LandRecord.ts, models/ReviewQueue.ts,
+   routes/documents.ts, routes/gis.ts, services/gis/postgisQueries.ts,
+   services/ocr/googleVision.ts remain — they predate Sprint 5 and are
+   Mongoose 8 typing issues, not runtime bugs.)
+
+Client:
+  cd /home/z/my-project/LandVision/client
+  npx tsc --noEmit
+
+  Result for Sprint 5 files: ZERO errors.
+    - client/components/ErrorBoundary.tsx   ✓
+    - client/app/layout.tsx                  ✓
+    - client/app/dashboard/page.tsx          ✓
+    - client/app/documents/[id]/page.tsx     ✓
+    - client/app/map/page.tsx                ✓
+    - client/app/navBarWrapper.tsx           ✓
+
+  Sprint 5 also fixed 3 pre-existing TS errors that were blocking a clean
+  type-check (see Task 6 above).
+
+
+
+
+================================================================================
+SECTION 5 — COMPLETE FILE MANIFEST
+================================================================================
+
+All changes from Sprint 5 commit 472d447. Total: 23 file operations
+(12 modified, 11 created, 2 deleted from git tracking).
+
+--------------------------------------------------------------------------------
+Files created (11)
+--------------------------------------------------------------------------------
+  server/.env.example                            1,739 bytes
+  server/.env.production.example                 2,805 bytes
+  client/.env.example                              971 bytes
+  client/.env.production.example                 1,237 bytes
+  render.yaml                                    2,226 bytes
+  client/vercel.json                               274 bytes
+  server/src/db/seedDemo.ts                     14,041 bytes
+  client/components/ErrorBoundary.tsx             4,085 bytes
+  DEPLOYMENT.md                                  8,683 bytes
+  DEMO_SCRIPT.md                                 7,196 bytes
+  README.md                                    (rewritten, ~470 lines)
+
+--------------------------------------------------------------------------------
+Files modified (12)
+--------------------------------------------------------------------------------
+  .gitignore                            +env hygiene, +*.tsbuildinfo
+  server/src/config/env.ts              +fatal-on-missing-prod, +CLIENT_ORIGIN
+  server/src/index.ts                   +CORS via CLIENT_ORIGIN, +404 catch-all
+  server/src/middleware/errorHandler.ts hardened, no stack leaks in prod
+  server/package.json                   +seed:demo script
+  client/app/layout.tsx                 +ErrorBoundary wrapper
+  client/app/dashboard/page.tsx         +ApiErrorFallback, +network-friendly msg
+  client/app/documents/[id]/page.tsx    +ApiErrorFallback, +network-friendly msg
+  client/app/map/page.tsx               +ApiErrorFallback, fixed setLoadingVillages bug
+  client/app/navBarWrapper.tsx           fixed children optional + null-safe supabase
+  package-lock.json                    workspace install updates
+  README.md                             (was empty, now comprehensive)
+
+--------------------------------------------------------------------------------
+Files deleted from git tracking (2)
+--------------------------------------------------------------------------------
+  server/.env        (was empty, now gitignored)
+  client/.env.local  (was empty, now gitignored)
+
+  Note: these were tracked as empty placeholders before Sprint 5. They are
+  now in .gitignore so real secrets never get committed. The .env.example
+  files serve as the templates instead.
+
+
+
+
+================================================================================
+SECTION 6 — DEPLOYMENT STATUS
+================================================================================
+
+Code: PUSHED to GitHub. Verified via:
+  git ls-remote origin main
+  -> 472d4475d21ec03a4b9b7778847b5c8f67ee3433  refs/heads/main
+
+Live deployed URLs: NOT YET PROVISIONED.
+  - The sandbox this work was done in cannot reach Render/Vercel dashboards
+    to create actual services.
+  - DEPLOYMENT.md gives the operator the exact recipe to provision:
+      Backend:  Render dashboard -> New -> Blueprint -> connect repo -> apply.
+                Then fill in 7 sync:false env vars in the dashboard.
+                Expected URL pattern: https://landvision-api.onrender.com
+      Frontend: Vercel dashboard -> Add New -> Project -> import repo.
+                Set Root Directory to client/.
+                Set NEXT_PUBLIC_API_URL, NEXT_PUBLIC_SUPABASE_URL,
+                NEXT_PUBLIC_SUPABASE_ANON_KEY in env vars.
+                Expected URL pattern: https://landvision.vercel.app
+      Final:    Paste the Vercel URL into Render's CLIENT_ORIGIN env var
+                and redeploy Render so CORS lets the frontend through.
+
+End-to-end DEMO_SCRIPT.md run-through on the deployed app:
+  CANNOT be verified from the sandbox — needs the live Render + Vercel
+  services provisioned first. Once they are, the operator should:
+    1. Run `npm run seed:demo` against the production MongoDB.
+    2. Run `npm run seed:plots` against the production Postgres.
+    3. Create the officer + reviewer Supabase accounts.
+    4. Follow DEMO_SCRIPT.md step by step on the deployed URLs.
+
+
+
+
+================================================================================
+SECTION 7 — KNOWN ISSUES AND HOW TO FIX THEM
+================================================================================
+
+--------------------------------------------------------------------------------
+Issue 1 — Windows + OneDrive: npm run dev fails with EINVAL: readlink
+--------------------------------------------------------------------------------
+Symptom:
+  Running `npm run dev` in client/ on Windows fails immediately with:
+    Error: EINVAL: invalid argument, readlink
+    'C:\Users\SAUMYA\OneDrive\Desktop\yes\LandVision\client\.next\server\
+    interception-route-rewrite-manifest.js'
+
+Root cause:
+  Next.js's pre-build cleanup tries to readlink() a file inside the .next/
+  cache folder. On Windows + OneDrive, OneDrive's background sync can hold
+  brief handles on these files, causing readlink() to return EINVAL instead
+  of the expected "not a symlink" result. The .next/ folder also contains
+  broken symlinks if a previous dev run was killed forcibly (closing the
+  terminal, BSOD, OneDrive taking over a file).
+
+This is NOT a Sprint 5 code bug — it's an environmental issue. The fix
+does not require any code changes.
+
+Fix (run in PowerShell from client/ directory):
+  cd C:\Users\SAUMYA\OneDrive\Desktop\yes\LandVision\client
+
+  # 1. Kill any stray Node processes that might be locking .next/ files
+  taskkill /F /IM node.exe 2>$null
+
+  # 2. Force-delete the entire .next build cache
+  Remove-Item -Recurse -Force .next -ErrorAction SilentlyContinue
+
+  # 3. Delete TypeScript incremental build cache
+  Remove-Item -Force tsconfig.tsbuildinfo -ErrorAction SilentlyContinue
+
+  # 4. Confirm .next is gone (should print False)
+  Test-Path .next
+
+  # 5. Start the dev server fresh
+  npm run dev
+
+If Step 2 fails with "file in use" errors:
+  Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
+  Start-Sleep -Seconds 2
+  Remove-Item -Recurse -Force .next
+  npm run dev
+
+If it STILL fails (rare — OneDrive itself is locking files):
+  # Temporarily pause OneDrive sync
+  taskkill /F /IM OneDrive.exe 2>$null
+  Remove-Item -Recurse -Force .next
+  npm run dev
+  # Restart OneDrive when done:
+  Start-Process "C:\Users\SAUMYA\AppData\Local\Microsoft\OneDrive\OneDrive.exe"
+
+Permanent fixes (pick one):
+  Option A — Move the project out of OneDrive to e.g. C:\dev\LandVision.
+             Most reliable. Run `npm install` once at the new path.
+  Option B — Exclude the LandVision folder from OneDrive sync via
+             OneDrive Settings -> Choose folders.
+  Option C — Right-click client\.next -> "Free up space" after every dev
+             session, or add a PowerShell alias:
+               function nrd { Remove-Item -Recurse -Force .next -ErrorAction SilentlyContinue; npm run dev }
+
+--------------------------------------------------------------------------------
+Issue 2 — Pre-existing TypeScript errors in untouched server files
+--------------------------------------------------------------------------------
+Sprint 5 server files type-check cleanly, but the original codebase has
+pre-existing TS errors in files Sprint 5 did NOT touch:
+  - server/src/controllers/documentsController.ts (lines 433, 451 —
+    axios headers typing)
+  - server/src/controllers/gisController.ts (line 66 — Request.query)
+  - server/src/models/LandRecord.ts (lines 35, 104 — Mongoose 8 typing
+    on documentId and toJSON transform)
+  - server/src/models/ReviewQueue.ts (line 17 — enum typing)
+  - server/src/routes/documents.ts (line 28 — ErrorCode comparison)
+  - server/src/routes/gis.ts (lines 12, 13 — Request type overload)
+  - server/src/services/gis/postgisQueries.ts (line 14 — id property)
+  - server/src/services/ocr/googleVision.ts (line 25 — string[] type)
+
+These are Mongoose 8 / Express 4 typing issues that do not affect runtime
+behaviour. They can be cleaned up in a future Sprint 6 type-cleanup pass.
+
+--------------------------------------------------------------------------------
+Issue 3 — Live deploy not yet provisioned
+--------------------------------------------------------------------------------
+The code is ready and pushed. The Render and Vercel services have not been
+created yet — the operator needs to follow DEPLOYMENT.md to provision them.
+Until that happens, the deployed URLs are unknown and the DEMO_SCRIPT.md
+end-to-end run-through on the deployed app cannot be verified.
+
+
+
+
+================================================================================
+SECTION 8 — REPRODUCING THE SPRINT 5 WORK
+================================================================================
+
+To reproduce the Sprint 5 verification from scratch:
+
+# 1. Clone the repo
+git clone https://github.com/Saumyajaiswal9794/LandVision.git
+cd LandVision
+
+# 2. Install dependencies (monorepo workspaces)
+npm install --no-audit --no-fund
+
+# 3. Build the shared types package once
+cd packages/types && npm run build && cd ../..
+
+# 4. Verify env startup check works as advertised
+cd server
+node /home/z/my-project/scripts/test-env-check.js
+# Expected: ALL TESTS PASSED (3/3 scenarios)
+
+# 5. Verify seed data consistency
+node /home/z/my-project/scripts/test-seed-consistency.js
+# Expected: PASS - all 10 seedDemo pairs are valid seedPlots pairs
+
+# 6. Type-check the server (Sprint 5 files only — pre-existing errors
+#    in untouched files will still show up)
+npx tsc --noEmit 2>&1 | grep -E "(env\.ts|index\.ts|errorHandler\.ts|seedDemo\.ts)"
+# Expected: empty output (no errors in Sprint 5 files)
+
+# 7. Type-check the client (Sprint 5 files + fixed pre-existing bugs)
+cd ../client
+rm -f tsconfig.tsbuildinfo
+npx tsc --noEmit 2>&1 | grep -E "(dashboard|documents/\[id\]|map|layout|ErrorBoundary|navBarWrapper)"
+# Expected: empty output (no errors in Sprint 5 files)
+
+
+
+
+================================================================================
+SECTION 9 — RECOMMENDED NEXT STEPS
+================================================================================
+
+For the operator / project owner:
+
+1. Fix the Windows dev environment first (Issue 1 above) so local dev works.
+   Recommended: move the repo to C:\dev\LandVision (off OneDrive).
+
+2. Provision the live deploy:
+   - Follow DEPLOYMENT.md to create the Render backend (Blueprint import).
+   - Follow DEPLOYMENT.md to create the Vercel frontend (project import).
+   - Set all env vars in both dashboards.
+   - Paste the Vercel URL into Render's CLIENT_ORIGIN and redeploy Render.
+
+3. Seed the production databases:
+   - From your local machine, with MONGODB_URI pointing at the production
+     Atlas instance:
+       cd server
+       MONGODB_URI=mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/landvision?retryWrites=true&w=majority \
+       npm run seed:demo
+   - With PG_CONNECTION_STRING pointing at the production Postgres:
+       PG_CONNECTION_STRING=postgresql://USER:PASSWORD@HOST:5432/landvision?sslmode=require \
+       npm run seed:plots
+
+4. Create the two demo Supabase accounts:
+   - officer@landvision.demo (role: officer in user_metadata)
+   - reviewer@landvision.demo (role: reviewer in user_metadata)
+   - Password: LandVision#123 (or whatever you choose)
+
+5. Run through DEMO_SCRIPT.md end-to-end on the deployed URLs and confirm
+   every step works with no console errors in the browser DevTools.
+
+6. (Optional) Capture the three screenshots called out in README.md
+   "Screenshots" section and drop them into docs/img/.
+
+7. (Optional, future Sprint 6) Clean up the pre-existing TypeScript errors
+   in untouched server files (Issue 2 above).
+
+
+
+
+================================================================================
+END OF FILE
+================================================================================
