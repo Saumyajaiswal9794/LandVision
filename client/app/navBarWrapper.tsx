@@ -14,8 +14,13 @@ export const useNavContext = () => useContext(NavContext);
 
 /**
  * Pages that don't need the nav bar or auth check.
+ *
+ * Note: '/' is intentionally NOT in this list — the root route now does its
+ * own auth-aware redirect to /dashboard or /login (see app/page.tsx) and we
+ * want NavBarWrapper's auth listener to run for it too, as a backstop in
+ * case the root page's redirect is slow or fails.
  */
-const PUBLIC_PATHS = ['/login', '/signup', '/'];
+const PUBLIC_PATHS = ['/login', '/signup'];
 
 export function NavBarWrapper({ children }: { children?: React.ReactNode }) {
   const pathname = usePathname();
