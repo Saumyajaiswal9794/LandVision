@@ -1,17 +1,20 @@
 'use client';
 
-import React, { useEffect, useState, useCallback, Suspense } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { Card, CardHeader, CardTitle, CardContent } from '../../components/card';
 import { Button } from '../../components/button';
-import { FileText, Filter, RefreshCw, Eye, UploadCloud } from 'lucide-react';
+import { FileText, Filter, RefreshCw, Eye, UploadCloud, FileStack, ClipboardCheck, CheckCircle2 } from 'lucide-react';
 import { ApiErrorFallback } from '../../components/ErrorBoundary';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
 // --- Status badge configuration ---
+// Keys match the EXACT status enum values in the LandRecord schema
+// (server/src/models/LandRecord.ts). Adding/removing a status here MUST be
+// mirrored in the schema and vice versa.
 const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
   uploaded:          { label: 'Uploaded',          className: 'bg-slate-100 text-slate-700 border-slate-200' },
   extracting:        { label: 'Extracting',        className: 'bg-yellow-100 text-yellow-800 border-yellow-300' },
@@ -22,6 +25,12 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
   reviewed_approved: { label: 'Reviewed Approved', className: 'bg-teal-100 text-teal-800 border-teal-300' },
   reviewed_rejected: { label: 'Reviewed Rejected', className: 'bg-red-100 text-red-800 border-red-300' },
 };
+
+// Statuses that count toward each summary card. Keeping these as constants
+// (rather than inlining magic strings) makes the business rule auditable.
+const IN_PIPELINE_STATUSES = ['uploaded', 'extracting', 'extracted', 'extraction_failed'];
+const PENDING_REVIEW_STATUSES = ['needs_review'];
+const DIGITIZED_STATUSES = ['auto_approved', 'reviewed_approved'];
 
 interface DocumentListItem {
   recordId: string;
@@ -34,14 +43,50 @@ interface DocumentListItem {
 }
 
 function DashboardContent() {
-   const router = useRouter();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const [documents, setDocuments] = useState<DocumentListItem[]>([]);
+  // allDocuments holds the UNFILTERED snapshot so the summary cards always
+  // show true totals — the visible table below respects statusFilter, but
+  // the cards must not change when the user filters.
+  const [allDocuments, setAllDocuments] = useState<DocumentListItem[]>([]);
   const [role, setRole] = useState<'officer' | 'reviewer' | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '');
 
+  // Fetch the unfiltered document list and store it for the summary cards.
+  // Called once on mount (and on manual refresh) — does NOT depend on filter.
+  const fetchAllDocuments = useCallback(async (): Promise<DocumentListItem[]> => {
+    if (!supabase) {
+      router.push('/login');
+      return [];
+    }
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError || !sessionData.session) {
+      router.push('/login');
+      return [];
+    }
+    const token = sessionData.session.access_token;
+    const userRole = sessionData.session.user?.user_metadata?.role;
+    setRole(userRole || null);
+
+    const res = await fetch(`${API_BASE_URL}/api/documents`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.status === 401) {
+      router.push('/login');
+      return [];
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Failed to fetch documents (${res.status})`);
+    }
+    const data = await res.json();
+    return (data.documents || []) as DocumentListItem[];
+  }, [router]);
+
+  // Fetch the (possibly filtered) document list for the visible table.
   const fetchDocuments = useCallback(async (filter: string) => {
     setLoading(true);
     setError('');
@@ -82,7 +127,13 @@ function DashboardContent() {
       }
 
       const data = await res.json();
-      setDocuments(data.documents || []);
+      const docs: DocumentListItem[] = data.documents || [];
+      setDocuments(docs);
+      // If we just did an unfiltered fetch, also update allDocuments so the
+      // summary cards reflect the latest totals.
+      if (!filter) {
+        setAllDocuments(docs);
+      }
     } catch (err) {
       // Distinguish network failures (CORS, backend down, no internet) from
       // server errors so the fallback message is actually useful.
@@ -100,9 +151,75 @@ function DashboardContent() {
     }
   }, [router]);
 
+  // On mount: fetch BOTH the unfiltered snapshot (for cards) and the filtered
+  // list (for the table). When no filter is set these are the same request —
+  // we still make both calls so the dependency arrays stay simple.
   useEffect(() => {
-    fetchDocuments(statusFilter);
+    (async () => {
+      try {
+        const all = await fetchAllDocuments();
+        setAllDocuments(all);
+        // If there's no filter, also seed the table from the unfiltered
+        // response to avoid a redundant second network call.
+        if (!statusFilter) {
+          setDocuments(all);
+          setLoading(false);
+        } else {
+          await fetchDocuments(statusFilter);
+        }
+      } catch (err) {
+        const e = err as Error;
+        const isNetwork =
+          e.message.includes('Failed to fetch') ||
+          e.message.includes('Network request failed') ||
+          e.message.toLowerCase().includes('network');
+        setError(
+          isNetwork
+            ? 'Could not reach the LandVision backend. The service may be starting up (Render free tier cold start) or your network may be down. Click retry to try again.'
+            : e.message,
+        );
+        setLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Re-fetch table when filter changes (cards stay on the unfiltered snapshot).
+  useEffect(() => {
+    if (statusFilter) {
+      fetchDocuments(statusFilter);
+    }
   }, [statusFilter, fetchDocuments]);
+
+  // Manual refresh — re-fetches BOTH the unfiltered snapshot (cards) and the
+  // filtered table.
+  const handleRefresh = useCallback(async () => {
+    try {
+      const all = await fetchAllDocuments();
+      setAllDocuments(all);
+      if (!statusFilter) {
+        setDocuments(all);
+      } else {
+        await fetchDocuments(statusFilter);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }, [fetchAllDocuments, fetchDocuments, statusFilter]);
+
+  // --- Summary card counts: derived from the UNFILTERED document list so
+  // they reflect true totals, not the current filter view.
+  const counts = useMemo(() => {
+    const inPipeline = allDocuments.filter((d) => IN_PIPELINE_STATUSES.includes(d.status)).length;
+    const pendingReview = allDocuments.filter((d) => PENDING_REVIEW_STATUSES.includes(d.status)).length;
+    const digitized = allDocuments.filter((d) => DIGITIZED_STATUSES.includes(d.status)).length;
+    return {
+      total: allDocuments.length,
+      inPipeline,
+      pendingReview,
+      digitized,
+    };
+  }, [allDocuments]);
 
   const handleStatusFilterChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     setStatusFilter(e.target.value);
@@ -142,6 +259,54 @@ function DashboardContent() {
         )}
       </div>
 
+      {/* --- Summary cards (counts derived from real GET /api/documents) --- */}
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <FileStack className="w-4 h-4 text-brand-600" />
+              In Pipeline
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <span className="text-4xl font-extrabold text-brand-600">{counts.inPipeline}</span>
+            <p className="text-xs text-slate-500 mt-1">
+              Uploaded, extracting, extracted, or failed
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ClipboardCheck className="w-4 h-4 text-amber-600" />
+              Pending Review
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <span className="text-4xl font-extrabold text-amber-600">{counts.pendingReview}</span>
+            <p className="text-xs text-slate-500 mt-1">
+              Low-confidence or validation-flagged
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              Digitized
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <span className="text-4xl font-extrabold text-emerald-600">{counts.digitized}</span>
+            <p className="text-xs text-slate-500 mt-1">
+              Auto-approved or reviewed-approved
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Status filter — only for reviewers */}
       {role === 'reviewer' && (
         <div className="flex items-center gap-3">
@@ -162,7 +327,7 @@ function DashboardContent() {
             <option value="reviewed_rejected">Reviewed Rejected</option>
           </select>
           <button
-            onClick={() => fetchDocuments(statusFilter)}
+            onClick={handleRefresh}
             disabled={loading}
             className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
             title="Refresh"
@@ -175,7 +340,7 @@ function DashboardContent() {
       {error && !loading && (
         <Card>
           <CardContent className="py-0">
-            <ApiErrorFallback message={error} onRetry={() => fetchDocuments(statusFilter)} />
+            <ApiErrorFallback message={error} onRetry={handleRefresh} />
           </CardContent>
         </Card>
       )}
@@ -202,7 +367,9 @@ function DashboardContent() {
       ) : (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Documents ({documents.length})</CardTitle>
+            <CardTitle className="text-lg">
+              Documents ({documents.length}{statusFilter ? ` of ${counts.total}` : ''})
+            </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             {/* Desktop table */}
