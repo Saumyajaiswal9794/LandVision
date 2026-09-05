@@ -29,6 +29,22 @@ export interface LandRecord {
     | 'reviewed_rejected';
   createdAt: Date;
 
+  // --- Original schema fields (populated by batch imports / pre-Sprint-2 data) -
+  // These are defined on the Mongoose schema in `server/src/models/LandRecord.ts`
+  // and MUST be present on the shared interface so the schema definition
+  // type-checks (TS2353 fires when the schema object literal contains a key
+  // the interface doesn't know about).
+  documentId?: string | null;
+  khataNumber?: string | null;
+  khasraNumber?: string | null;
+  khatoniNumber?: string | null;
+  owners?: string[];
+  areaTotal?: number | null;
+  areaUnit?: 'HECTARE' | 'ACRE' | 'BIGHA' | 'KILLA' | 'MARLA' | null;
+  tehsil?: string | null;
+  state?: string | null;
+  gisPlotId?: string | null;
+
   // Sprint 2: AI extraction fields
   extractedFields?: {
     ownerName?: ExtractedFieldValue;
@@ -45,6 +61,16 @@ export interface LandRecord {
   validationFlags?: string[];
   reviewedBy?: string | null;
   reviewedAt?: Date | null;
+
+  // Legacy fields kept on the schema for backward compatibility with
+  // documents imported under earlier schema versions. Typed loosely because
+  // they are not part of the new extraction pipeline.
+  legacyExtractedFields?: ExtractedField[];
+  confidenceScore?: {
+    ocrOverall?: number | null;
+    llmOverall?: number | null;
+    combined?: number | null;
+  };
 }
 
 export interface DocumentUploadResponse {

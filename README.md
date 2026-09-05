@@ -282,8 +282,20 @@ cp server/.env.example server/.env        # fill in real values
 cp client/.env.example client/.env.local  # fill in real values
 ```
 
+Copy `server/.env.example` to `server/.env` and `client/.env.example` to
+`client/.env.local`, then fill in real values. **Do not create any other
+`.env` files** — `.env.production.example` files are reference-only for what
+to set in your hosting dashboard (Render / Vercel), not local files.
+
 Both `.env.example` files are checked into git and document every variable.
 **Never commit a real `.env`** — see `.gitignore`.
+
+The server's env loader (`server/src/config/env.ts`) resolves `server/.env`
+relative to its own location, so it works whether you start the dev server
+from the monorepo root via Turborepo (`npm run dev`) or directly from inside
+`/server` (`cd server && npm run dev`). If `server/.env` is missing or any
+required variable is empty, you'll see an `[env:warn]` message in dev (or a
+`[FATAL]` crash in production) naming exactly which variables are missing.
 
 ### 3. Create the `plots` PostGIS table
 
