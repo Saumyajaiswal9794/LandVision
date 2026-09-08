@@ -429,7 +429,7 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
         timeout: 30000, // 30 second timeout
       });
 
-      imageBuffer = Buffer.from(response.data);
+      imageBuffer = Buffer.from(response.data as ArrayBuffer);
       // Axios types `headers[...]` as `string | number | true | string[] | AxiosHeaders`, but
       // the Content-Type response header is always a single string (or absent) in practice.
       // Coerce via String(...) so the assignment to `mimeType: string` type-checks without
@@ -453,7 +453,7 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
             responseType: 'arraybuffer',
             timeout: 30000,
           });
-          imageBuffer = Buffer.from(retryResponse.data);
+          imageBuffer = Buffer.from(retryResponse.data as ArrayBuffer);
           const retryContentType = retryResponse.headers['content-type'];
           mimeType = (typeof retryContentType === 'string' && retryContentType) || 'image/jpeg';
           console.log(`[Extraction] Retry download succeeded: ${imageBuffer.length} bytes`);

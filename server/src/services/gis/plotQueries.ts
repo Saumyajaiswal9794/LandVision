@@ -13,6 +13,7 @@ export async function getPlotByKhasra(
   khasraNumber: string,
   village: string,
 ): Promise<any> {
+  if (!pgPool) throw new Error('PostgreSQL not configured — set PG_CONNECTION_STRING in server/.env');
   const result = await pgPool.query(
     `SELECT id, khasra_number, village, district,
             ST_AsGeoJSON(geom) as geojson, created_at
@@ -42,6 +43,7 @@ export async function getPlotByKhasra(
  * enriched with LandRecord status and ownerName from MongoDB.
  */
 export async function getPlotsByVillage(village: string): Promise<any> {
+  if (!pgPool) throw new Error('PostgreSQL not configured — set PG_CONNECTION_STRING in server/.env');
   const result = await pgPool.query(
     `SELECT id, khasra_number, village, district,
             ST_AsGeoJSON(geom) as geojson

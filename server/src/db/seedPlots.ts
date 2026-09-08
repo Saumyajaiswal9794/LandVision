@@ -95,6 +95,7 @@ async function seedPlots() {
   console.log(`[Seed] Found ${combos.size} unique khasra+village combinations.`);
 
   // Clear existing plots
+  if (!pgPool) throw new Error('PG_CONNECTION_STRING is required for seeding. Set it in server/.env');
   const pgClient = await pgPool.connect();
   try {
     await pgClient.query('DELETE FROM plots');
@@ -123,7 +124,7 @@ async function seedPlots() {
   } finally {
     pgClient.release();
     await mongoose.disconnect();
-    await pgPool.end();
+    await pgPool!.end();
   }
 }
 
