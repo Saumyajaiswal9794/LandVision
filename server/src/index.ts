@@ -1,4 +1,9 @@
-import 'dotenv/config';
+// NOTE: dotenv is no longer loaded here via `import 'dotenv/config'`.
+// `server/src/config/env.ts` now loads `.env` from a path explicitly resolved
+// relative to that file, so the right file is found whether the server is
+// started via `npm run dev` from the monorepo root (Turborepo, CWD = repo root)
+// or directly from inside /server (CWD = /server). Importing env.ts first
+// thing below triggers the load before any other module reads process.env.
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { env, getAllowedOrigins } from './config/env';

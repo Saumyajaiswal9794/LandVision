@@ -13,6 +13,16 @@ export interface LandRecord {
     storageUrl: string;
     status: 'uploaded' | 'ocr_done' | 'extracting' | 'extracted' | 'extraction_failed' | 'needs_review' | 'auto_approved' | 'reviewed' | 'reviewed_approved' | 'reviewed_rejected';
     createdAt: Date;
+    documentId?: string | null;
+    khataNumber?: string | null;
+    khasraNumber?: string | null;
+    khatoniNumber?: string | null;
+    owners?: string[];
+    areaTotal?: number | null;
+    areaUnit?: 'HECTARE' | 'ACRE' | 'BIGHA' | 'KILLA' | 'MARLA' | null;
+    tehsil?: string | null;
+    state?: string | null;
+    gisPlotId?: string | null;
     extractedFields?: {
         ownerName?: ExtractedFieldValue;
         khasraNumber?: ExtractedFieldValue;
@@ -26,6 +36,12 @@ export interface LandRecord {
     validationFlags?: string[];
     reviewedBy?: string | null;
     reviewedAt?: Date | null;
+    legacyExtractedFields?: ExtractedField[];
+    confidenceScore?: {
+        ocrOverall?: number | null;
+        llmOverall?: number | null;
+        combined?: number | null;
+    };
 }
 export interface DocumentUploadResponse {
     recordId: string;

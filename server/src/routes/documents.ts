@@ -23,12 +23,20 @@ const upload = multer({
 });
 
 // Multer error handler middleware
+//
+// `multer.MulterError.code` is typed as a strict union (`ErrorCode`):
+//   "LIMIT_PART_COUNT" | "LIMIT_FILE_SIZE" | "LIMIT_FILE_COUNT" |
+//   "LIMIT_FIELD_KEY" | "LIMIT_FIELD_VALUE" | "LIMIT_FIELD_COUNT" |
+//   "LIMIT_UNEXPECTED_FILE"
+//
+// The previously-present `err.code === 'FILE_TOO_LARGE'` branch was a dead
+// comparison — 'FILE_TOO_LARGE' is NOT a member of `ErrorCode` and would
+// never match. It also triggered TS2367 because the literal had no overlap
+// with the union. Removed; the actual file-size-exceeded case is handled by
+// `LIMIT_FILE_SIZE` below.
 const multerErrorHandler = (err: any, req: Request, res: Response, next: NextFunction) => {
   if (err instanceof multer.MulterError) {
-    if (err.code === 'FILE_TOO_LARGE') {
-      res.status(413).json({ error: 'File too large. Maximum size is 10MB.' });
-      return;
-    } else if (err.code === 'LIMIT_FILE_SIZE') {
+    if (err.code === 'LIMIT_FILE_SIZE') {
       res.status(413).json({ error: 'File too large. Maximum size is 10MB.' });
       return;
     } else if (err.code === 'LIMIT_FILE_COUNT') {

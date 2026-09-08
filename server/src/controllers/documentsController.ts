@@ -430,7 +430,13 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
       });
 
       imageBuffer = Buffer.from(response.data);
-      mimeType = response.headers['content-type'] || 'image/jpeg';
+      // Axios types `headers[...]` as `string | number | true | string[] | AxiosHeaders`, but
+      // the Content-Type response header is always a single string (or absent) in practice.
+      // Coerce via String(...) so the assignment to `mimeType: string` type-checks without
+      // `as any` — `String(undefined)` yields the literal string "undefined", but the
+      // `|| 'image/jpeg'` fallback below handles the actual missing-header case first.
+      const contentTypeHeader = response.headers['content-type'];
+      mimeType = (typeof contentTypeHeader === 'string' && contentTypeHeader) || 'image/jpeg';
       console.log(`[Extraction] Downloaded ${imageBuffer.length} bytes, MIME: ${mimeType}`);
     } catch (downloadError) {
       console.error('[Extraction] Failed to download file:', downloadError);
@@ -448,7 +454,8 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
             timeout: 30000,
           });
           imageBuffer = Buffer.from(retryResponse.data);
-          mimeType = retryResponse.headers['content-type'] || 'image/jpeg';
+          const retryContentType = retryResponse.headers['content-type'];
+          mimeType = (typeof retryContentType === 'string' && retryContentType) || 'image/jpeg';
           console.log(`[Extraction] Retry download succeeded: ${imageBuffer.length} bytes`);
         } catch (retryError) {
           // Distinguish URL-refresh-then-fail from simple download failure

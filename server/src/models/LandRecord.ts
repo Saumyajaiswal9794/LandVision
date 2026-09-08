@@ -100,11 +100,16 @@ const LandRecordSchema = new Schema<LandRecordDocument>(
   {
     timestamps: true,
     toJSON: {
+      // Mongoose's typing for `ret` here is a complex union that doesn't reliably
+      // include `_id` / `id` accessors, which previously produced TS2339/TS18046.
+      // Cast `ret` to a precise record type so the transform body type-checks
+      // without resorting to `as any` or `@ts-ignore`.
       transform: (_, ret) => {
-        ret.id = ret._id.toString();
-        delete (ret as Record<string, unknown>)._id;
-        delete (ret as Record<string, unknown>).__v;
-        return ret;
+        const r = ret as Record<string, unknown> & { _id: unknown };
+        r.id = String(r._id);
+        delete r._id;
+        delete r.__v;
+        return r;
       },
     },
   },
