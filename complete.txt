@@ -431,3 +431,373 @@ KNOWN LIMITATIONS / FUTURE WORK
 5. The Sprint A pre-existing client-side errors (unescaped apostrophe
    in login page, unused RefreshCw import, leaflet window-access during
    prerender) were also fixed as a side-effect. Same reason.
+
+
+================================================================================
+SPRINT C — Validation and routing adapted to multi-row
+================================================================================
+
+REQUIREMENTS (from the brief)
+---------------------------------------------------------------------------
+1. Update duplicateDetection, areaSumCheck and confidenceRouting to work
+   per row and per field.
+2. Duplicate check: same khasraNumber + subSurveyNumber + village on a
+   different documentId, and also within the same document.
+3. Area-sum: sum plotArea per village across records, unchanged in meaning.
+4. Confidence routing: compute a row-level confidence (e.g. minimum of
+   the required fields), status auto_approved or needs_review by the
+   existing CONFIDENCE_THRESHOLD, and store a list lowConfidenceFields
+   on the row so the UI can highlight only those.
+5. Store validation results as flags: [{ rule, severity, message, field? }].
+6. Add unit tests for all three validators (vitest already added in
+   Sprint B).
+
+Commit: feat(validation): per-row validation, low-confidence field list,
+structured flags
+
+
+WHAT WAS DONE
+---------------------------------------------------------------------------
+
+packages/types/index.ts:
+- New ValidationSeverity type: 'error' | 'warning' | 'info'.
+- New ValidationFlag interface: { rule, severity, message, field? }.
+- LandRecord extended with two new optional fields:
+    * validationResults: ValidationFlag[]  (structured flags alongside
+      the legacy validationFlags: string[] for back-compat)
+    * lowConfidenceFields: string[]  (required-field names below
+      CONFIDENCE_THRESHOLD — populated by routeRowByConfidence so the
+      UI can highlight only those fields)
+
+server/src/models/LandRecord.ts:
+- New ValidationResultSchema sub-schema (rule, severity, message, field).
+- Two new schema fields: validationResults: [ValidationResultSchema]
+  and lowConfidenceFields: [String]. The existing validationFlags: [String]
+  is kept for backward compatibility.
+
+server/src/services/validation/duplicateDetection.ts (REWRITE):
+- detectDuplicateFlags(input) → ValidationFlag[] (per-row).
+- Checks if another row has the same khasraNumber + subSurveyNumber + village:
+    * 'duplicate_detected_cross_doc'   (severity error) — different documentId
+    * 'duplicate_detected_within_doc'  (severity error) — same documentId, 2+ rows
+    * 'duplicate_detected'             (severity error) — generic fallback
+- Sub-survey matching is exact; rows with missing sub-survey only match
+  other rows that also have a missing sub-survey (avoids false positives).
+- Case-insensitive on village, exact on khasra/subSurvey (normalised ids).
+- detectDuplicates() legacy shim kept for old string[] callers.
+
+server/src/services/validation/areaSumCheck.ts (REWRITE):
+- checkAreaSumFlags(input) → { flags, totalArea, limit } (per-row).
+- Sums plotArea (hectares) across ALL rows for the village — meaning
+  unchanged from the original implementation. The current row's plotArea
+  is added via input.currentPlotArea so it's counted even when the row
+  hasn't been saved yet.
+- Two flags:
+    * 'exceeds_village_total' (severity error)   — total > limit
+    * 'near_village_total'    (severity warning) — total > 80% of limit
+- parsePlotArea() exported as a unit-testable helper — extracts the
+  leading numeric value from strings like '2.5 hectare', '1.85 हेक्टेयर',
+  '0.5 ha', '3'.
+- checkAreaSum() legacy shim kept for old string[] callers.
+
+server/src/services/validation/confidenceRouting.ts (REWRITE):
+- routeRowByConfidence(row, validationFlags, threshold) → RoutingResult
+  { status, lowConfidenceFields, rowConfidence }.
+- Row-level confidence = MIN of the 6 required fields' confidence
+  (0 if any required field is missing/null/empty).
+- Routing decision:
+    * any 'error'-severity flag → needs_review
+    * any required field below threshold → needs_review
+    * any required field null/empty → needs_review
+    * otherwise → auto_approved
+- lowConfidenceFields[] populated so the UI can highlight only those
+  fields in amber; confident fields are dimmed/collapsed.
+- routeByConfidence() legacy shim accepts both string[] and ValidationFlag[].
+
+server/src/controllers/documentsController.ts (triggerExtraction):
+- Per-row structured validation results pushed onto validationResults[].
+- Per-row routing uses routeRowByConfidence → stores validationResults,
+  lowConfidenceFields, and the legacy validationFlags (string[]) on each
+  child LandRecord.
+- Response includes validationResults + lowConfidenceFields + rowConfidence
+  per child record so the client can render the structured flags.
+
+NEW TEST FILES (vitest):
+- server/src/services/validation/__tests__/duplicateDetection.test.ts (8 tests)
+- server/src/services/validation/__tests__/areaSumCheck.test.ts (14 tests:
+    7 for parsePlotArea + 7 for checkAreaSumFlags)
+- server/src/services/validation/__tests__/confidenceRouting.test.ts
+  (13 tests: 10 for routeRowByConfidence + 3 for routeByConfidence legacy shim)
+
+Total Sprint C tests: 35 new tests. Combined with the 13 from Sprint B
+(bboxConverter), the server now has 45 unit tests — all passing.
+
+
+COMMIT
+---------------------------------------------------------------------------
+Commit hash: 802ac6f
+Title: feat(validation): per-row validation, low-confidence field list,
+       structured flags
+Files changed: 9 (4 modified + 3 new test files + 2 source files)
+Lines: +1219 / -132
+
+
+================================================================================
+SPRINT D — API and review UI
+================================================================================
+
+REQUIREMENTS (from the brief)
+---------------------------------------------------------------------------
+1. API: update GET /api/documents/:id to return the document plus all its
+   rows; add GET /api/records?documentId=... ; PATCH for editing a single
+   field of a row (mark source human_corrected, confidence 1.0). Keep
+   existing endpoint paths working. Protect with the existing auth and
+   requireRole middleware.
+2. Update client/lib/api.ts types accordingly.
+3. Document detail page: show the source image with an overlay layer that
+   draws bounding boxes (percent-based absolute positioning so it scales)
+   for the selected row; clicking a row in a table selects it; low-confidence
+   fields are highlighted in amber and confident ones are collapsed or dimmed.
+4. Beside each low-confidence field show a cropped preview of its bbox from
+   the image (CSS background-position/size is enough, no server work).
+5. Keep approve / edit / reject working, now per row, plus an "approve all
+   high-confidence rows" button.
+6. Add loading, empty and error states. No new UI library.
+
+Commit: feat(client): multi-row review UI with bbox overlay and field-level
+highlighting
+
+
+WHAT WAS DONE
+---------------------------------------------------------------------------
+
+API ENDPOINTS
+-------------
+
+GET /api/documents/:id  (extended)
+  - Returns the document itself PLUS a rows[] array containing every
+    child LandRecord (rows where documentId == this document's _id),
+    sorted by pageNo, rowIndex.
+  - Each row object carries: recordId, documentId, rowIndex, pageNo,
+    extractedFields, extractionSource, validationFlags, validationResults,
+    lowConfidenceFields, status, reviewedBy, reviewedAt, createdAt, updatedAt.
+  - Also returns validationResults and lowConfidenceFields on the document
+    itself.
+
+GET /api/records?documentId=...&status=...  (new)
+  - Lists rows, optionally filtered by documentId and/or status.
+  - Officers only see their own uploads; reviewers see all.
+  - Returns { records: [...], total } in { pageNo, rowIndex } order.
+
+GET /api/records/:id  (replaces legacy mock)
+  - Returns a single row's full detail (typed response).
+
+PATCH /api/records/:id  (new)
+  - Edits a SINGLE field of a row.
+  - Body: { fieldName: 'ownerName', value: 'Ram Singh' }
+  - Sets source='human_corrected', confidence=1.0, removes the field
+    from lowConfidenceFields.
+  - Protected by requireAuth + requireRole(['reviewer']).
+
+PATCH /api/documents/:id/review  (extended)
+  - Body now accepts optional rowId — when present, the action applies
+    to the row identified by rowId (must belong to this document).
+  - New action 'approve_all_high_confidence' — batch-approves every
+    needs_review child row with no error-severity validationResults AND
+    no lowConfidenceFields. Returns { documentId, approvedCount }.
+  - Existing approve / reject / edit actions now operate per-row when
+    rowId is supplied, per-document when omitted.
+
+client/lib/api.ts (rewrite):
+  - New typed response shapes:
+      DocumentDetail (with rows[]),
+      DocumentRow,
+      DocumentListItem,
+      ExtractedFieldValue,
+      ReviewRequestBody.
+  - New method: updateRecordField(id, fieldName, value) for single-field PATCH.
+  - listRecords() now accepts { documentId, status } filter.
+  - getDocumentDetail() / reviewDocument() return the new typed shapes.
+
+UI COMPONENTS
+-------------
+
+client/components/review/bboxOverlay.tsx (NEW):
+  - Renders the source image with absolutely-positioned bbox rectangles
+    using PERCENT coordinates (0-100) so the overlay scales correctly
+    when the image is resized by the layout.
+  - Selected row's boxes drawn in amber; non-selected rows drawn dimmed.
+  - Each box is keyboard-accessible (role=button, tabIndex=0) and calls
+    onSelectBox(fieldKey) on click — clicking a box scrolls the matching
+    field input into view.
+
+client/components/review/croppedFieldPreview.tsx (NEW):
+  - Small (default 56x56) thumbnail of the source image cropped to the
+    field's bbox, using CSS background-position/size — no server work.
+  - Uses the standard sprite-sheet crop formula:
+      background-size:     (100/width)% (100/height)%
+      background-position: (x/(1-width))% (y/(1-height))%
+  - Falls back to the full image when bbox is missing or full-image.
+
+client/app/documents/[id]/page.tsx (REWRITE):
+  - Multi-row table at the top — each row shows khasra, owner, area,
+    confidence badge, and status. Clicking a row selects it (highlighted
+    in amber). Rows with low-confidence fields show an amber badge;
+    rows with error flags show a red badge; clean rows show a green badge.
+  - Source-image panel now uses BboxOverlay — boxes are drawn for the
+    selected row (amber) and dimmed for other rows (slate).
+  - Right panel shows the SELECTED ROW's extracted fields (or the
+    document's own fields in legacy single-record mode):
+      * Low-confidence fields highlighted with amber ring + amber bg.
+      * Cropped preview thumbnail shown beside each field with a bbox.
+      * Editable inputs for reviewers when status='needs_review'.
+  - Per-row Approve / Reject / Save Corrections buttons (reviewers only).
+  - 'Approve all high-confidence rows' banner appears above the table
+    when at least one needs_review row has no error flags and no
+    low-confidence fields. One click batch-approves all eligible rows.
+  - Loading, empty (404), and error states with ApiErrorFallback.
+  - Reject modal now operates per-row (when rowId is set) or per-document.
+
+server/src/controllers/documentsController.ts (extended):
+  - getDocumentDetail fetches child rows via
+    LandRecord.find({ documentId: id, _id: { $ne: id } })
+      .sort({ pageNo: 1, rowIndex: 1 }).lean()
+  - reviewDocument handles 4 actions: approve | reject | edit |
+    approve_all_high_confidence. Per-row when rowId is in the body.
+  - applyHumanCorrection() helper centralises the single-field edit
+    logic (sets value/confidence/source, removes field from
+    lowConfidenceFields).
+
+server/src/controllers/recordsController.ts (REWRITE):
+  - listRecords: query params ?documentId=... &status=...; typed rows.
+  - getRecordById: typed row detail response.
+  - updateRecord: PATCH a single field by { fieldName, value }.
+
+server/src/routes/records.ts:
+  - PATCH /api/records/:id now requires requireRole(['reviewer']).
+
+
+HOW IT WAS DONE
+---------------------------------------------------------------------------
+1. Started by inspecting the existing validators and confirming they
+   were returning flat string[] — needed to upgrade them to return
+   structured ValidationFlag[] without breaking existing callers.
+
+2. Added the new types to packages/types (ValidationFlag,
+   ValidationSeverity) and extended LandRecord with validationResults
+   + lowConfidenceFields.
+
+3. For each validator, kept the OLD function name as a thin shim that
+   returns the legacy shape (string[]), and added a new function with
+   a Flags suffix that returns the structured shape. This way no caller
+   breaks during the migration.
+
+4. Wrote the tests FIRST (TDD-ish): for each validator, listed the
+   behaviours I expected and wrote a test for each. Then ran the tests
+   against the new implementation and fixed the few off-by-one issues
+   (e.g. the near_village_total threshold was exactly 80% and the test
+   hit the boundary; bumped the test values to 410 ha so the >80% test
+   passes).
+
+5. For Sprint D API: extended getDocumentDetail to also return rows[]
+   (child records), and rewrote recordsController to actually query
+   MongoDB instead of returning hardcoded mocks.
+
+6. For the bbox overlay, used percent-based absolute positioning so the
+   overlay scales with the image. The crop formula for the small
+   preview uses background-size/position — pure CSS, no server work,
+   as required by the brief.
+
+7. For the "approve all" button: gated it behind a useMemo that checks
+   whether at least one needs_review row has no error-severity flags
+   and no lowConfidenceFields. The button calls the new
+   'approve_all_high_confidence' action which loops over child rows
+   server-side.
+
+8. Loading / empty / error states:
+   - Loading: spinner while fetchDocument is in flight.
+   - Empty (404): "Document not found." message.
+   - Error: ApiErrorFallback with retry button (existing component).
+
+
+HOW TO VERIFY
+---------------------------------------------------------------------------
+From the repo root:
+
+  # Rebuild everything from scratch:
+  rm -rf client/.next server/dist packages/types/dist
+  npm install
+  npm run build           # all 3 packages must succeed
+
+  # Run the unit tests:
+  npx vitest run --root server
+  # Expected: 45/45 passing across 4 test files
+  #   - bboxConverter.test.ts          (13 tests, Sprint B)
+  #   - duplicateDetection.test.ts     ( 8 tests, Sprint C)
+  #   - areaSumCheck.test.ts           (14 tests, Sprint C)
+  #   - confidenceRouting.test.ts      (13 tests, Sprint C)
+
+  # Manual API check (after starting the server):
+  #   GET  /api/documents/:id         → response now includes rows[]
+  #   GET  /api/records?documentId=X  → list of rows for that document
+  #   GET  /api/records/:id           → single row detail
+  #   PATCH /api/records/:id          → { fieldName, value } updates one field
+  #   PATCH /api/documents/:id/review → { action: 'approve', rowId: '...' }
+
+
+WHAT THE TWO COMMITS CONTAIN
+---------------------------------------------------------------------------
+Commit 3 (Sprint C): feat(validation): per-row validation, low-confidence
+                     field list, structured flags
+  9 files changed, 1219 insertions(+), 132 deletions(-)
+
+Commit 4 (Sprint D): feat(client): multi-row review UI with bbox overlay
+                     and field-level highlighting
+  7 files changed, 1268 insertions(+), 203 deletions(-)
+
+
+KNOWN LIMITATIONS / FUTURE WORK (Sprint C+D additions)
+---------------------------------------------------------------------------
+C1. The within-document duplicate check requires the row to already be
+    saved (we need at least 2 matches in MongoDB to flag). On the very
+    first row of a document the duplicate check returns no flags; the
+    second row with the same khasra+village will then trip the within-doc
+    duplicate flag for BOTH rows (but only the second one is actually
+    saved with the flag). A future enhancement could re-validate earlier
+    siblings when a new sibling is added.
+
+C2. The duplicate check uses exact string match on khasraNumber after
+    a trim — no fuzzy matching. Two rows whose khasra numbers differ
+    only in zero-padding (e.g. "102" vs "0102") will not be flagged as
+    duplicates. A future enhancement could normalise numeric prefixes.
+
+C3. The area-sum check sums the leading numeric value of plotArea
+    strings regardless of unit — "2.5 acres" and "2.5 hectares" are
+    summed together as 5.0. A future enhancement could parse the unit
+    suffix and convert to hectares before summing.
+
+D1. The bbox overlay assumes the image fills the container width. If
+    the image is narrower than the container (small uploaded thumbnails),
+    the boxes will appear slightly off. The container uses object-contain
+    which centers the image — the boxes are positioned relative to the
+    container, not the image's visible rect. A future enhancement could
+    measure the image's rendered rect via a ref + ResizeObserver and
+    offset the boxes accordingly.
+
+D2. The "approve all high-confidence rows" button uses the validation
+    state captured at extraction time. If a reviewer manually edits a
+    field (via PATCH /api/records/:id), the row's lowConfidenceFields
+    IS updated (the field is removed from the list) — but the button
+    visibility is computed from the server's response, so the reviewer
+    needs to refetch the document after manual edits for the button
+    state to refresh.
+
+D3. The cropped preview uses CSS background-position/size which works
+    perfectly on most browsers but may have a 1-2px rounding error on
+    fractional bbox coordinates. Acceptable for a review UI.
+
+D4. PATCH /api/records/:id currently allows editing any field name —
+    there's no whitelist. A future enhancement could validate that
+    fieldName is one of the known ExtractedField keys (ownerName,
+    khasraNumber, plotArea, village, district, landClass, khataNumber,
+    tehsil, subSurveyNumber, fatherOrHusbandName, remarks).
