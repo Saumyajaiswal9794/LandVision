@@ -4,10 +4,11 @@ import { AuthenticatedRequest } from '../middleware/auth';
 import { uploadDocument as uploadToStorage, deleteDocument, regenerateSignedUrl } from '../services/storage/supabaseStorage';
 import { LandRecord } from '../models/LandRecord';
 import { extractLandRecord } from '../services/extraction/extractLandRecord';
-import { checkAreaSum } from '../services/validation/areaSumCheck';
-import { detectDuplicates } from '../services/validation/duplicateDetection';
-import { routeByConfidence } from '../services/validation/confidenceRouting';
+import { checkAreaSumFlags } from '../services/validation/areaSumCheck';
+import { detectDuplicateFlags } from '../services/validation/duplicateDetection';
+import { routeRowByConfidence } from '../services/validation/confidenceRouting';
 import { env } from '../config/env';
+import { ValidationFlag } from '@landvision/types';
 
 /**
  * Returns true if a Supabase signed URL has expired.
@@ -526,6 +527,9 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
       status: string;
       extractionSource: string;
       validationFlags: string[];
+      validationResults: ValidationFlag[];
+      lowConfidenceFields: string[];
+      rowConfidence: number;
     }> = [];
 
     for (let i = 0; i < extractionResult.rows.length; i++) {
@@ -546,28 +550,44 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
         remarks: row.remarks,
       };
 
-      // --- Validation ---
-      const validationFlags: string[] = [];
+      // --- Sprint C: per-row structured validation ---
+      const validationResults: ValidationFlag[] = [];
       try {
         const khasraNumberValue = row.khasraNumber?.value || null;
-        const duplicateFlags = await detectDuplicates(
-          khasraNumberValue,
+        const subSurveyNumberValue = row.subSurveyNumber?.value || null;
+        const duplicateFlags = await detectDuplicateFlags({
+          khasraNumber: khasraNumberValue,
+          subSurveyNumber: subSurveyNumberValue,
           village,
-          undefined, // excludeRecordId — child record not yet saved
+          documentId,
+          excludeRecordId: undefined, // child record not yet saved
           district,
-        );
-        validationFlags.push(...duplicateFlags);
+        });
+        validationResults.push(...duplicateFlags);
 
-        const areaFlags = await checkAreaSum(village, undefined, undefined);
-        validationFlags.push(...areaFlags);
+        // Area-sum check — pass the current row's plotArea so it's counted.
+        const currentPlotArea = row.plotArea?.value || null;
+        const areaResult = await checkAreaSumFlags({
+          village,
+          villageAreaLimit: undefined,
+          excludeRecordId: undefined,
+          currentPlotArea,
+          documentId,
+        });
+        validationResults.push(...areaResult.flags);
       } catch (validationError) {
         console.warn(`[Extraction] Row ${i} validation warning (non-fatal):`, validationError);
+        validationResults.push({
+          rule: 'validation_exception',
+          severity: 'warning',
+          message: `Validation threw: ${(validationError as Error).message}`,
+        });
       }
 
-      // --- Routing ---
-      const routingStatus = routeByConfidence(row, validationFlags, env.CONFIDENCE_THRESHOLD);
-      const childStatus: 'needs_review' | 'auto_approved' =
-        routingStatus === 'needs_review' ? 'needs_review' : 'auto_approved';
+      // --- Sprint C: per-row confidence routing with lowConfidenceFields ---
+      const routing = routeRowByConfidence(row, validationResults, env.CONFIDENCE_THRESHOLD);
+      const childStatus: 'needs_review' | 'auto_approved' = routing.status;
+      const legacyFlagStrings = validationResults.map((f) => f.rule);
 
       // --- Persist the child record ---
       const childRecord = new LandRecord({
@@ -588,8 +608,10 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
         extractedFields,
         extractionSource: row.extractionSource,
 
-        // Validation + routing
-        validationFlags,
+        // Sprint C: validation + routing
+        validationFlags: legacyFlagStrings, // legacy string[] for back-compat
+        validationResults,                  // structured flags { rule, severity, message, field? }
+        lowConfidenceFields: routing.lowConfidenceFields,
         status: childStatus,
       });
 
@@ -600,7 +622,10 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
         pageNo: row.pageNo,
         status: childStatus,
         extractionSource: row.extractionSource,
-        validationFlags,
+        validationFlags: legacyFlagStrings,
+        validationResults,
+        lowConfidenceFields: routing.lowConfidenceFields,
+        rowConfidence: routing.rowConfidence,
       });
     }
 

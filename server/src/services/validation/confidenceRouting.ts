@@ -1,77 +1,200 @@
 import { env } from '../../config/env';
 import { ConvertedRow } from '../extraction/geminiExtract';
+import { ValidationFlag } from '@landvision/types';
 
 export type RoutingStatus = 'needs_review' | 'auto_approved';
 
-/**
- * Routes a single extracted row based on confidence thresholds and validation
- * flags.
- *
- * In Sprint A/B we now extract potentially multiple rows per page, so this
- * function operates on ONE row at a time — the caller invokes it per row
- * when persisting LandRecords.
- *
- * @param row                  One extracted row from the orchestrator.
- * @param validationFlags      Validation issues found for this row.
- * @param confidenceThreshold  Minimum confidence (default from env).
- * @returns                    'needs_review' or 'auto_approved'.
- */
-export function routeByConfidence(
-  row: ConvertedRow,
-  validationFlags: string[],
-  confidenceThreshold: number = env.CONFIDENCE_THRESHOLD,
-): RoutingStatus {
-  // If any validation flags are present, route to review.
-  if (validationFlags.length > 0) {
-    console.log(
-      `[Routing] Validation flags detected: ${validationFlags.join(', ')} → needs_review`,
-    );
-    return 'needs_review';
-  }
+// ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
 
-  // The 6 required fields — check each one's confidence.
-  const fieldNames = [
-    'ownerName',
-    'khasraNumber',
-    'plotArea',
-    'village',
-    'district',
-    'landClass',
-  ] as const;
+/** The 6 required fields whose confidence is checked for routing. */
+export const REQUIRED_FIELDS = [
+  'ownerName',
+  'khasraNumber',
+  'plotArea',
+  'village',
+  'district',
+  'landClass',
+] as const;
 
-  for (const fieldName of fieldNames) {
-    const field = row[fieldName];
-    if (!field) {
-      console.log(`[Routing] ${fieldName} missing → needs_review`);
-      return 'needs_review';
-    }
-    if (field.confidence < confidenceThreshold) {
-      console.log(
-        `[Routing] ${fieldName} confidence (${field.confidence.toFixed(2)}) below threshold (${confidenceThreshold}) → needs_review`,
-      );
-      return 'needs_review';
-    }
-    if (field.value === null || field.value === undefined || field.value === '') {
-      console.log(`[Routing] ${fieldName} is null/empty (not extracted) → needs_review`);
-      return 'needs_review';
-    }
-  }
+export type RequiredFieldName = (typeof REQUIRED_FIELDS)[number];
 
-  console.log('[Routing] All confidence checks passed → auto_approved');
-  return 'auto_approved';
+export interface RoutingResult {
+  status: RoutingStatus;
+  /** Names of required fields below the threshold — UI uses this to
+   *  highlight only those fields. */
+  lowConfidenceFields: string[];
+  /** Computed row-level confidence = MIN of required fields' confidence
+   *  (0 if any required field is missing). */
+  rowConfidence: number;
 }
 
 // ---------------------------------------------------------------------------
-// Legacy compatibility shim
+// Public API
 // ---------------------------------------------------------------------------
 
 /**
- * @deprecated Old single-row API kept around for callers that haven't been
- * migrated to the multi-row shape. Internally wraps `routeByConfidence` on
- * a synthesized `ConvertedRow`.
+ * Sprint C — per-row confidence routing.
  *
- * Accepts the old shape: `{ ownerName: { value, confidence }, ... }` and
- * the validation flags array.
+ * Computes a row-level confidence = MIN of the 6 required fields'
+ * confidence values (0 if any required field is missing or null).
+ *
+ * Routing decision:
+ *   - If any ValidationFlag has severity 'error'  → needs_review
+ *   - If rowConfidence < env.CONFIDENCE_THRESHOLD  → needs_review
+ *   - If any required field is null/empty         → needs_review
+ *   - Otherwise                                     → auto_approved
+ *
+ * Returns a structured `RoutingResult` with the `lowConfidenceFields`
+ * list (names of fields below the threshold) so the UI can highlight
+ * only those fields in amber — confident fields are dimmed/collapsed.
+ *
+ * `validationFlags` here is the new structured shape `ValidationFlag[]`.
+ * The legacy `routeByConfidence()` (string[] flags) is preserved as a
+ * thin shim below.
+ */
+export function routeRowByConfidence(
+  row: ConvertedRow,
+  validationFlags: ValidationFlag[],
+  confidenceThreshold: number = env.CONFIDENCE_THRESHOLD,
+): RoutingResult {
+  // If any structured flag has severity 'error', the row goes to review.
+  const hasErrorFlag = validationFlags.some((f) => f.severity === 'error');
+  if (hasErrorFlag) {
+    const lowConfidenceFields = computeLowConfidenceFields(row, confidenceThreshold);
+    const rowConfidence = computeRowConfidence(row);
+    console.log(
+      `[Routing] Row has ${validationFlags.filter((f) => f.severity === 'error').length} ` +
+      `error-severity validation flag(s) → needs_review`,
+    );
+    return {
+      status: 'needs_review',
+      lowConfidenceFields,
+      rowConfidence,
+    };
+  }
+
+  // Walk the 6 required fields.
+  const lowConfidenceFields: string[] = [];
+  let minConfidence = 1.0;
+
+  for (const fieldName of REQUIRED_FIELDS) {
+    const field = row[fieldName];
+    if (!field) {
+      lowConfidenceFields.push(fieldName);
+      minConfidence = 0;
+      console.log(`[Routing] ${fieldName} missing → needs_review`);
+      continue;
+    }
+    if (field.value === null || field.value === undefined || field.value === '') {
+      lowConfidenceFields.push(fieldName);
+      minConfidence = 0;
+      console.log(`[Routing] ${fieldName} is null/empty (not extracted) → needs_review`);
+      continue;
+    }
+    if (field.confidence < confidenceThreshold) {
+      lowConfidenceFields.push(fieldName);
+      console.log(
+        `[Routing] ${fieldName} confidence (${field.confidence.toFixed(2)}) ` +
+        `below threshold (${confidenceThreshold}) → needs_review`,
+      );
+    }
+    if (field.confidence < minConfidence) {
+      minConfidence = field.confidence;
+    }
+  }
+
+  if (lowConfidenceFields.length > 0) {
+    return {
+      status: 'needs_review',
+      lowConfidenceFields,
+      rowConfidence: minConfidence,
+    };
+  }
+
+  console.log(
+    `[Routing] All confidence checks passed (row conf ${minConfidence.toFixed(2)}) → auto_approved`,
+  );
+  return {
+    status: 'auto_approved',
+    lowConfidenceFields: [],
+    rowConfidence: minConfidence,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Returns the names of required fields below the threshold. */
+function computeLowConfidenceFields(
+  row: ConvertedRow,
+  confidenceThreshold: number,
+): string[] {
+  const out: string[] = [];
+  for (const fieldName of REQUIRED_FIELDS) {
+    const field = row[fieldName];
+    if (!field) {
+      out.push(fieldName);
+      continue;
+    }
+    if (
+      field.value === null ||
+      field.value === undefined ||
+      field.value === ''
+    ) {
+      out.push(fieldName);
+      continue;
+    }
+    if (field.confidence < confidenceThreshold) {
+      out.push(fieldName);
+    }
+  }
+  return out;
+}
+
+/** Row-level confidence = MIN of the 6 required fields' confidence. */
+function computeRowConfidence(row: ConvertedRow): number {
+  let min = 1.0;
+  for (const fieldName of REQUIRED_FIELDS) {
+    const field = row[fieldName];
+    if (!field) return 0;
+    if (field.confidence < min) min = field.confidence;
+  }
+  return min;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy compatibility shims
+// ---------------------------------------------------------------------------
+
+/**
+ * @deprecated Old single-row API. New code should use `routeRowByConfidence`
+ * which returns the structured `RoutingResult` with `lowConfidenceFields`.
+ *
+ * This shim accepts the legacy `string[]` flag list (no severity info)
+ * and treats ANY flag as a reason to route to needs_review.
+ */
+export function routeByConfidence(
+  row: ConvertedRow,
+  validationFlags: string[] | ValidationFlag[],
+  confidenceThreshold: number = env.CONFIDENCE_THRESHOLD,
+): RoutingStatus {
+  // Coerce string[] → ValidationFlag[] (each becomes severity 'error').
+  const structured: ValidationFlag[] = Array.isArray(validationFlags)
+    ? validationFlags.map((f: any) =>
+        typeof f === 'string'
+          ? { rule: f, severity: 'error' as const, message: f }
+          : f,
+      )
+    : [];
+  return routeRowByConfidence(row, structured, confidenceThreshold).status;
+}
+
+/**
+ * @deprecated Old single-row API. Kept for callers that haven't migrated
+ * to the multi-row shape. Wraps `routeByConfidence` on a synthesized row.
  */
 export function routeByConfidenceLegacy(
   extractedFields: {
@@ -82,7 +205,7 @@ export function routeByConfidenceLegacy(
     district?: { value: string | null; confidence: number };
     landClass?: { value: string | null; confidence: number };
   },
-  validationFlags: string[],
+  validationFlags: string[] | ValidationFlag[],
   confidenceThreshold: number = env.CONFIDENCE_THRESHOLD,
 ): RoutingStatus {
   const row: ConvertedRow = {
@@ -109,7 +232,9 @@ export const evaluateConfidenceRoute = async (record: any): Promise<boolean> => 
 };
 
 export default {
+  routeRowByConfidence,
   routeByConfidence,
   routeByConfidenceLegacy,
   evaluateConfidenceRoute,
+  REQUIRED_FIELDS,
 };
