@@ -6,7 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../../../components/card';
 import { Button } from '../../../components/button';
-import { ArrowLeft, Check, X, Save, AlertTriangle, Loader2, ShieldCheck, ShieldX, ImageOff, MapPin, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Check, X, Save, AlertTriangle, Loader2, ShieldCheck, ShieldX, ImageOff, MapPin } from 'lucide-react';
 import { ApiErrorFallback } from '../../../components/ErrorBoundary';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';

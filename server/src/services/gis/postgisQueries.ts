@@ -11,6 +11,7 @@ export const queryGISPlot = async (
   console.log(`[GIS Service] Querying PostGIS for Khasra ${khasraNumber} in village ${village}`);
 
   return {
+    plotId: 'gis_mock_456',
     id: 'gis_mock_456',
     khasraNumber,
     village,

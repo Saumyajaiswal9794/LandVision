@@ -195,10 +195,21 @@ export type ReviewStatus = 'pending' | 'approved' | 'rejected';
 // Sprint 2: GIS Plot Data
 export interface GISPlotData {
   plotId: string;
+  /** Stable backend id of the GIS feature (may differ from plotId). */
+  id?: string;
   khasraNumber: string;
   village: string;
   district: string;
+  /** Tehsil the plot falls under. */
+  tehsil?: string;
+  /** State the plot falls under. */
+  state?: string;
+  /** Optional GeoJSON-style geometry blob (polygon coordinates, etc.). */
   geometry?: Record<string, unknown>;
+  /** Raw coordinate array, e.g. `[[[lng, lat], [lng, lat], ...]]` for a polygon. */
+  coordinates?: number[][][];
+  /** Plot area in square metres (when known from the GIS source). */
+  areaSquareMeters?: number;
 }
 
 // ---------------------------------------------------------------------------
