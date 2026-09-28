@@ -37,8 +37,12 @@ export const connectPostgres = async (): Promise<void> => {
     console.log('Successfully connected to PostgreSQL/PostGIS');
     client.release();
   } catch (error) {
-    console.error('PostgreSQL/PostGIS connection error:', error);
-    process.exit(1);
+    console.error('PostgreSQL/PostGIS connection error:', (error as Error).message || error);
+    if (env.NODE_ENV === 'production') {
+      process.exit(1);
+    } else {
+      console.warn('[db:warn] PostgreSQL is not reachable locally. The server is continuing in development mode without PostGIS.');
+    }
   }
 };
 

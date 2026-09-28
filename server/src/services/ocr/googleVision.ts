@@ -1,4 +1,4 @@
-import { ExtractedField } from '@landvision/types';
+import { LegacyExtractedField } from '@landvision/types';
 
 /**
  * Performs Google Cloud Vision OCR on a document stored at the given URL.
@@ -6,7 +6,7 @@ import { ExtractedField } from '@landvision/types';
  */
 export const performGoogleVisionOCR = async (
   documentUrl: string,
-): Promise<ExtractedField[]> => {
+): Promise<LegacyExtractedField[]> => {
   // Placeholder: Real integration uses Google Cloud Vision client library
   console.log(`[GoogleVision OCR] Processing document: ${documentUrl}`);
 

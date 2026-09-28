@@ -1,11 +1,11 @@
-import { ExtractedField } from '@landvision/types';
+import { LegacyExtractedField } from '@landvision/types';
 
 /**
  * Performs local Tesseract OCR on a document when cloud OCR (Google Vision) fails.
  */
 export const performTesseractOCR = async (
   documentUrl: string,
-): Promise<ExtractedField[]> => {
+): Promise<LegacyExtractedField[]> => {
   // Placeholder: Real integration executes local Tesseract bindings
   console.log(`[Tesseract OCR Fallback] Processing document: ${documentUrl}`);
 

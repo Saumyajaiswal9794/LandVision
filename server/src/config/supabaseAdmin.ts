@@ -12,15 +12,20 @@ let _supabaseAdmin: SupabaseClient | null = null;
 
 function getSupabaseAdmin(): SupabaseClient {
   if (!_supabaseAdmin) {
-    if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_KEY) {
+    const key =
+      env.SUPABASE_SERVICE_KEY && env.SUPABASE_SERVICE_KEY !== 'your-supabase-service-role-key'
+        ? env.SUPABASE_SERVICE_KEY
+        : env.SUPABASE_ANON_KEY;
+
+    if (!env.SUPABASE_URL || !key || key === 'your-supabase-anon-key') {
       throw new Error(
-        'SUPABASE_URL and SUPABASE_SERVICE_KEY must be set to use Supabase features. ' +
+        'SUPABASE_URL and SUPABASE_SERVICE_KEY (or SUPABASE_ANON_KEY) must be set to use Supabase features. ' +
         'Add them to server/.env — see server/.env.example for reference.',
       );
     }
     _supabaseAdmin = createClient(
       env.SUPABASE_URL,
-      env.SUPABASE_SERVICE_KEY,
+      key,
       {
         auth: {
           autoRefreshToken: false,
