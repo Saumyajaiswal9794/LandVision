@@ -83,7 +83,10 @@ export const listDocuments = async (req: AuthenticatedRequest, res: Response): P
 };
 
 // ---------------------------------------------------------------------------
-// Sprint 3: GET /documents/:id — full document detail
+// Sprint 3 + Sprint D: GET /documents/:id — full document detail
+// Sprint D: also returns the child row records that belong to this document
+//           (rows where documentId == this document's _id). The document
+//           itself is the upload record; child rows are the extracted plots.
 // ---------------------------------------------------------------------------
 export const getDocumentDetail = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -123,6 +126,46 @@ export const getDocumentDetail = async (req: AuthenticatedRequest, res: Response
 
     const r = record as any;
 
+    // -----------------------------------------------------------------------
+    // Sprint D: fetch all child row records (rows belonging to this document).
+    // A row is any LandRecord whose documentId == this document's _id AND
+    // whose _id is NOT this document's _id (the upload record itself has
+    // documentId === null until it's been promoted to a parent; we filter
+    // it out by requiring _id != id).
+    // -----------------------------------------------------------------------
+    let rows: any[] = [];
+    try {
+      const childDocs = await LandRecord.find({
+        documentId: id,
+        _id: { $ne: id },
+      })
+        .sort({ pageNo: 1, rowIndex: 1 })
+        .lean();
+
+      rows = childDocs.map((c: any) => ({
+        recordId: c._id?.toString?.() || c.id,
+        documentId: c.documentId,
+        rowIndex: c.rowIndex ?? null,
+        pageNo: c.pageNo ?? null,
+        filename: c.filename,
+        village: c.village,
+        district: c.district,
+        extractedFields: c.extractedFields || {},
+        extractionSource: c.extractionSource || null,
+        validationFlags: c.validationFlags || [],
+        validationResults: c.validationResults || [],
+        lowConfidenceFields: c.lowConfidenceFields || [],
+        status: c.status,
+        reviewedBy: c.reviewedBy || null,
+        reviewedAt: c.reviewedAt || null,
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
+      }));
+    } catch (rowsErr) {
+      console.warn('Failed to load child rows for document:', rowsErr);
+      // Continue without rows — the document itself is still returnable.
+    }
+
     res.status(200).json({
       recordId: r._id,
       filename: r.filename,
@@ -140,14 +183,20 @@ export const getDocumentDetail = async (req: AuthenticatedRequest, res: Response
       extractedFields: r.extractedFields || {},
       extractionSource: r.extractionSource,
       validationFlags: r.validationFlags || [],
+      // Sprint C: structured flags + low-confidence fields
+      validationResults: r.validationResults || [],
+      lowConfidenceFields: r.lowConfidenceFields || [],
       status: r.status,
       storageUrl: r.storageUrl,
+      storagePath: r.storagePath,
       uploadedBy: r.uploadedBy,
       reviewedBy: r.reviewedBy,
       reviewedAt: r.reviewedAt,
       extractionError: r.extractionError,
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
+      // Sprint D: all child rows belonging to this document
+      rows,
     });
   } catch (error) {
     console.error('getDocumentDetail error:', error);
@@ -156,8 +205,40 @@ export const getDocumentDetail = async (req: AuthenticatedRequest, res: Response
 };
 
 // ---------------------------------------------------------------------------
-// Sprint 3: PATCH /documents/:id/review — reviewer actions
+// Sprint 3 + Sprint D: PATCH /documents/:id/review — reviewer actions
+//
+// Sprint D: now operates per-row as well as per-document.
+//   action: 'approve' | 'reject' | 'edit'
+//     - Per-document  (no rowId in body): operates on the document itself.
+//     - Per-row        (rowId in body):    operates on the row LandRecord
+//                                          identified by rowId.
+//   action: 'approve_all_high_confidence'
+//     - Iterates ALL child rows of the document; any row currently in
+//       'needs_review' but with NO error-severity validationResults
+//       AND no lowConfidenceFields is auto-approved in batch.
 // ---------------------------------------------------------------------------
+
+// Helper — normalises a single extracted field with a human-corrected value.
+function applyHumanCorrection(record: any, fieldName: string, newValue: string): void {
+  if (!record.extractedFields) {
+    record.extractedFields = {} as any;
+  }
+  const fields = record.extractedFields as any;
+  if (!fields[fieldName]) {
+    fields[fieldName] = { value: null, confidence: 0 };
+  }
+  fields[fieldName].value = newValue;
+  fields[fieldName].confidence = 1.0;
+  fields[fieldName].source = 'human_corrected';
+  // Remove from lowConfidenceFields (if present) since the field has
+  // just been corrected to confidence 1.0.
+  if (Array.isArray(record.lowConfidenceFields)) {
+    record.lowConfidenceFields = record.lowConfidenceFields.filter(
+      (f: string) => f !== fieldName,
+    );
+  }
+}
+
 export const reviewDocument = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -166,23 +247,73 @@ export const reviewDocument = async (req: AuthenticatedRequest, res: Response): 
     }
 
     const { id } = req.params;
-    const { action, correctedFields, reason } = req.body;
+    const { action, correctedFields, reason, rowId } = req.body;
 
-    if (!['approve', 'reject', 'edit'].includes(action)) {
-      res.status(400).json({ error: 'Invalid action. Must be "approve", "reject", or "edit".' });
+    const validActions = ['approve', 'reject', 'edit', 'approve_all_high_confidence'];
+    if (!validActions.includes(action)) {
+      res.status(400).json({
+        error: 'Invalid action. Must be "approve", "reject", "edit", or "approve_all_high_confidence".',
+      });
       return;
     }
 
-    const record = await LandRecord.findById(id);
+    // -----------------------------------------------------------------------
+    // Sprint D: "approve all high-confidence rows" — batch action.
+    // -----------------------------------------------------------------------
+    if (action === 'approve_all_high_confidence') {
+      const childDocs = await LandRecord.find({
+        documentId: id,
+        _id: { $ne: id },
+        status: 'needs_review',
+      });
 
-    if (!record) {
-      res.status(404).json({ error: 'Document not found' });
+      let approvedCount = 0;
+      for (const child of childDocs) {
+        const hasErrorFlag = (child.validationResults || []).some(
+          (f: any) => f.severity === 'error',
+        );
+        const hasLowConfidence = (child.lowConfidenceFields || []).length > 0;
+        if (!hasErrorFlag && !hasLowConfidence) {
+          child.status = 'reviewed_approved';
+          child.reviewedBy = req.user.id;
+          child.reviewedAt = new Date();
+          await child.save();
+          approvedCount++;
+        }
+      }
+      res.status(200).json({
+        documentId: id,
+        approvedCount,
+        message: `${approvedCount} row(s) auto-approved.`,
+      });
       return;
+    }
+
+    // -----------------------------------------------------------------------
+    // Per-row vs per-document: pick the record to operate on.
+    // -----------------------------------------------------------------------
+    let record: any;
+    if (rowId) {
+      // Per-row review: the row must belong to this document.
+      record = await LandRecord.findOne({ _id: rowId, documentId: id });
+      if (!record) {
+        res.status(404).json({
+          error: `Row ${rowId} not found under document ${id}.`,
+        });
+        return;
+      }
+    } else {
+      // Per-document review: operate on the document itself.
+      record = await LandRecord.findById(id);
+      if (!record) {
+        res.status(404).json({ error: 'Document not found' });
+        return;
+      }
     }
 
     if (record.status !== 'needs_review') {
       res.status(400).json({
-        error: `Document status is "${record.status}". Only "needs_review" documents can be reviewed.`,
+        error: `Status is "${record.status}". Only "needs_review" records can be reviewed.`,
       });
       return;
     }
@@ -195,8 +326,9 @@ export const reviewDocument = async (req: AuthenticatedRequest, res: Response): 
 
       res.status(200).json({
         recordId: record._id,
+        rowId: rowId || null,
         status: record.status,
-        message: 'Document approved successfully.',
+        message: rowId ? 'Row approved successfully.' : 'Document approved successfully.',
       });
       return;
     }
@@ -206,14 +338,15 @@ export const reviewDocument = async (req: AuthenticatedRequest, res: Response): 
       record.reviewedBy = req.user.id;
       record.reviewedAt = new Date();
       if (reason) {
-        record.extractionError = reason; // reuse the error field for rejection reason
+        record.extractionError = reason;
       }
       await record.save();
 
       res.status(200).json({
         recordId: record._id,
+        rowId: rowId || null,
         status: record.status,
-        message: 'Document rejected.',
+        message: rowId ? 'Row rejected.' : 'Document rejected.',
       });
       return;
     }
@@ -224,18 +357,12 @@ export const reviewDocument = async (req: AuthenticatedRequest, res: Response): 
         return;
       }
 
-      // Merge corrected fields into extractedFields
-      const currentFields = record.extractedFields || {} as any;
-
+      // Apply each corrected field individually — source=human_corrected,
+      // confidence=1.0. Removes the field from lowConfidenceFields.
       for (const [fieldName, newValue] of Object.entries(correctedFields)) {
-        if (currentFields[fieldName]) {
-          currentFields[fieldName].value = newValue;
-          currentFields[fieldName].confidence = 1.0;
-          currentFields[fieldName].source = 'human_corrected';
-        }
+        applyHumanCorrection(record, fieldName, String(newValue));
       }
 
-      record.extractedFields = currentFields;
       record.status = 'reviewed_approved';
       record.reviewedBy = req.user.id;
       record.reviewedAt = new Date();
@@ -243,9 +370,13 @@ export const reviewDocument = async (req: AuthenticatedRequest, res: Response): 
 
       res.status(200).json({
         recordId: record._id,
+        rowId: rowId || null,
         status: record.status,
         extractedFields: record.extractedFields,
-        message: 'Corrections saved and document approved.',
+        lowConfidenceFields: record.lowConfidenceFields || [],
+        message: rowId
+          ? 'Row corrections saved and approved.'
+          : 'Corrections saved and document approved.',
       });
       return;
     }
