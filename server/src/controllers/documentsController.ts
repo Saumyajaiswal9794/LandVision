@@ -354,7 +354,18 @@ export const getDocumentStatus = async (req: AuthenticatedRequest, res: Response
 };
 
 /**
- * Triggers AI extraction and validation on a land record
+ * Triggers AI extraction and validation on a land record.
+ *
+ * Sprint B: extraction now returns potentially MULTIPLE rows per page (one row
+ * per plot visible on the page). We persist ONE LandRecord per extracted row,
+ * linked back to the source document via `documentId` (== the upload record's
+ * `_id`), `rowIndex` (0-based), `pageNo` (1-based), and `extractionSource`.
+ *
+ * The original upload record's status is set to `extracted` once all rows
+ * are persisted. Each child record is routed independently via the
+ * confidence check (so a high-confidence row from the same page can be
+ * auto-approved while a low-confidence sibling goes to needs_review).
+ *
  * POST /api/documents/:id/extract
  */
 export const triggerExtraction = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -366,7 +377,8 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
 
     const { id } = req.params;
 
-    // Fetch the LandRecord
+    // Fetch the LandRecord (this acts as the "document" — many child records
+    // will be created from it via documentId).
     const record = await LandRecord.findById(id);
     if (!record) {
       res.status(404).json({ error: 'Document not found' });
@@ -430,11 +442,6 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
       });
 
       imageBuffer = Buffer.from(response.data as ArrayBuffer);
-      // Axios types `headers[...]` as `string | number | true | string[] | AxiosHeaders`, but
-      // the Content-Type response header is always a single string (or absent) in practice.
-      // Coerce via String(...) so the assignment to `mimeType: string` type-checks without
-      // `as any` — `String(undefined)` yields the literal string "undefined", but the
-      // `|| 'image/jpeg'` fallback below handles the actual missing-header case first.
       const contentTypeHeader = response.headers['content-type'];
       mimeType = (typeof contentTypeHeader === 'string' && contentTypeHeader) || 'image/jpeg';
       console.log(`[Extraction] Downloaded ${imageBuffer.length} bytes, MIME: ${mimeType}`);
@@ -479,25 +486,21 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
     }
 
     // -----------------------------------------------------------------------
-    // STEP 3: Extract fields using Gemini/Tesseract
+    // STEP 3: Extract fields — Gemini (multi-row) with Tesseract fallback.
+    // Returns one entry per plot row visible on the page.
     // -----------------------------------------------------------------------
-    let extractedFields;
+    let extractionResult;
     try {
-      console.log('[Extraction] Starting extraction...');
-      const result = await extractLandRecord(imageBuffer, mimeType);
-
-      extractedFields = {
-        ownerName: result.ownerName,
-        khasraNumber: result.khasraNumber,
-        plotArea: result.plotArea,
-        village: result.village,
-        district: result.district,
-        landClass: result.landClass,
-      };
-
-      record.extractedFields = extractedFields;
-      record.extractionSource = result.extractionSource;
-      console.log(`[Extraction] Extraction succeeded (source: ${result.extractionSource})`);
+      console.log('[Extraction] Starting extraction (multi-row)...');
+      // For now we treat the upload as a single-page document (pageNo=1).
+      // Multi-page PDF support is a future extension — when added, this loop
+      // would call extractLandRecord once per page.
+      const pageNo = 1;
+      extractionResult = await extractLandRecord(imageBuffer, mimeType, pageNo);
+      console.log(
+        `[Extraction] Extraction succeeded (source: ${extractionResult.extractionSource}, ` +
+        `${extractionResult.rows.length} row(s)).`,
+      );
     } catch (extractionError) {
       console.error('[Extraction] Extraction failed:', extractionError);
       record.status = 'extraction_failed';
@@ -508,47 +511,118 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
     }
 
     // -----------------------------------------------------------------------
-    // STEP 4: Run validation checks
+    // STEP 4: Persist ONE LandRecord per extracted row, run per-row
+    // validation + routing.
     // -----------------------------------------------------------------------
-    const validationFlags: string[] = [];
+    const documentId = record._id.toString(); // upload record id
+    const uploadedBy = record.uploadedBy;
+    const village = record.village;
+    const district = record.district;
 
-    try {
-      // Check for duplicates — scope by district to avoid cross-district false positives
-      const khasraNumber = extractedFields.khasraNumber?.value || null;
-      const duplicateFlags = await detectDuplicates(
-        khasraNumber,
-        record.village,
-        record._id.toString(),
-        record.district,   // new: pass district for narrower matching
-      );
-      validationFlags.push(...duplicateFlags);
+    const persistedRecords: Array<{
+      recordId: string;
+      rowIndex: number;
+      pageNo: number;
+      status: string;
+      extractionSource: string;
+      validationFlags: string[];
+    }> = [];
 
-      // Check area sum — limit comes from env.VILLAGE_AREA_LIMIT_HECTARES (no hardcoded 500)
-      const areaFlags = await checkAreaSum(record.village, undefined, record._id.toString());
-      validationFlags.push(...areaFlags);
+    for (let i = 0; i < extractionResult.rows.length; i++) {
+      const row = extractionResult.rows[i];
 
-      record.validationFlags = validationFlags;
-      console.log(`[Extraction] Validation complete (${validationFlags.length} flags)`);
-    } catch (validationError) {
-      console.warn('[Extraction] Validation warning (non-fatal):', validationError);
-      // Continue even if validation fails (don't fail the extraction)
+      // Build the extractedFields sub-document for this row.
+      const extractedFields = {
+        ownerName: row.ownerName,
+        khasraNumber: row.khasraNumber,
+        plotArea: row.plotArea,
+        village: row.village,
+        district: row.district,
+        landClass: row.landClass,
+        khataNumber: row.khataNumber,
+        tehsil: row.tehsil,
+        subSurveyNumber: row.subSurveyNumber,
+        fatherOrHusbandName: row.fatherOrHusbandName,
+        remarks: row.remarks,
+      };
+
+      // --- Validation ---
+      const validationFlags: string[] = [];
+      try {
+        const khasraNumberValue = row.khasraNumber?.value || null;
+        const duplicateFlags = await detectDuplicates(
+          khasraNumberValue,
+          village,
+          undefined, // excludeRecordId — child record not yet saved
+          district,
+        );
+        validationFlags.push(...duplicateFlags);
+
+        const areaFlags = await checkAreaSum(village, undefined, undefined);
+        validationFlags.push(...areaFlags);
+      } catch (validationError) {
+        console.warn(`[Extraction] Row ${i} validation warning (non-fatal):`, validationError);
+      }
+
+      // --- Routing ---
+      const routingStatus = routeByConfidence(row, validationFlags, env.CONFIDENCE_THRESHOLD);
+      const childStatus: 'needs_review' | 'auto_approved' =
+        routingStatus === 'needs_review' ? 'needs_review' : 'auto_approved';
+
+      // --- Persist the child record ---
+      const childRecord = new LandRecord({
+        // Document-scoped fields
+        documentId,
+        rowIndex: row.rowIndex,
+        pageNo: row.pageNo,
+
+        // Inherited from the upload record
+        filename: record.filename,
+        village,
+        district,
+        uploadedBy,
+        storagePath: record.storagePath,
+        storageUrl: record.storageUrl,
+
+        // Extraction output
+        extractedFields,
+        extractionSource: row.extractionSource,
+
+        // Validation + routing
+        validationFlags,
+        status: childStatus,
+      });
+
+      const saved = await childRecord.save();
+      persistedRecords.push({
+        recordId: saved._id.toString(),
+        rowIndex: row.rowIndex,
+        pageNo: row.pageNo,
+        status: childStatus,
+        extractionSource: row.extractionSource,
+        validationFlags,
+      });
     }
 
     // -----------------------------------------------------------------------
-    // STEP 5: Route by confidence
+    // STEP 5: Mark the upload (parent) record as extracted.
+    // We set its status to the worst status among the children —
+    // if any child needs_review, the parent is flagged as needs_review too
+    // so reviewers see the document in their queue.
     // -----------------------------------------------------------------------
-    const routingStatus = routeByConfidence(extractedFields, validationFlags, env.CONFIDENCE_THRESHOLD);
-    record.status = routingStatus === 'needs_review' ? 'needs_review' : 'auto_approved';
-
-    // Save the updated record
+    const anyChildNeedsReview = persistedRecords.some((r) => r.status === 'needs_review');
+    record.status = anyChildNeedsReview ? 'needs_review' : 'extracted';
+    record.extractionSource = extractionResult.extractionSource;
+    record.extractionError = null;
     await record.save();
 
     res.status(200).json({
       recordId: record._id,
+      documentId,
       status: record.status,
-      extractedFields: record.extractedFields,
-      extractionSource: record.extractionSource,
-      validationFlags: record.validationFlags,
+      extractionSource: extractionResult.extractionSource,
+      rowsExtracted: persistedRecords.length,
+      childRecords: persistedRecords,
       confidenceThreshold: env.CONFIDENCE_THRESHOLD,
     });
   } catch (error) {
