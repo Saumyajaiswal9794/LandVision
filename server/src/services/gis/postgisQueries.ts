@@ -11,22 +11,10 @@ export const queryGISPlot = async (
   console.log(`[GIS Service] Querying PostGIS for Khasra ${khasraNumber} in village ${village}`);
 
   return {
-    id: 'gis_mock_456',
+    plotId: 'gis_mock_456',
     khasraNumber,
     village,
-    tehsil: 'Tehsil-A',
     district: 'District-B',
-    state: 'State-C',
-    coordinates: [
-      [
-        [77.1025, 28.7041],
-        [77.1035, 28.7041],
-        [77.1035, 28.7051],
-        [77.1025, 28.7051],
-        [77.1025, 28.7041], // Closed Loop Polygon
-      ],
-    ],
-    areaSquareMeters: 10000,
   };
 };
 export default queryGISPlot;

@@ -190,7 +190,7 @@ export interface User {
 }
 
 // Sprint 2: Review Queue
-export type ReviewStatus = 'pending' | 'approved' | 'rejected';
+export type ReviewStatus = 'PENDING' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED';
 
 // Sprint 2: GIS Plot Data
 export interface GISPlotData {

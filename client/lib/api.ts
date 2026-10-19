@@ -19,7 +19,7 @@ class ApiClient {
     const token = await this.getAuthToken();
 
     const headers: Record<string, string> = {
-      ...options.headers,
+      ...(options.headers as Record<string, string> | undefined),
     };
 
     // Only set Content-Type for non-FormData requests
