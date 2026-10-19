@@ -12,7 +12,6 @@ export default function SignUpPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [role, setRole] = useState<'officer' | 'reviewer'>('reviewer');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -41,15 +40,10 @@ export default function SignUpPage() {
         return;
       }
 
-      // Sign up with Supabase
+      // Sign up with Supabase (role defaults to officer; reviewer/admin assigned via app_metadata)
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
-        options: {
-          data: {
-            role: role, // Store role in user_metadata
-          },
-        },
       });
 
       if (error) {
@@ -104,18 +98,6 @@ export default function SignUpPage() {
               />
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">Role</label>
-              <select
-                value={role}
-                onChange={(e) => setRole(e.target.value as 'officer' | 'reviewer')}
-                disabled={loading}
-                className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-brand-500 disabled:bg-gray-100"
-              >
-                <option value="officer">Officer (Upload Documents)</option>
-                <option value="reviewer">Reviewer (Review Documents)</option>
-              </select>
-            </div>
 
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-700">Password</label>

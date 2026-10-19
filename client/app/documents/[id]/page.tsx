@@ -116,8 +116,8 @@ export default function DocumentDetailPage() {
       }
 
       const token = sessionData.session.access_token;
-      const userRole = sessionData.session.user?.user_metadata?.role;
-      setRole(userRole || null);
+      const userRole = sessionData.session.user?.app_metadata?.role || sessionData.session.user?.user_metadata?.role || 'officer';
+      setRole(userRole);
 
       const res = await fetch(`${API_BASE_URL}/api/documents/${id}`, {
         headers: { Authorization: `Bearer ${token}` },

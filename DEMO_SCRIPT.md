@@ -18,9 +18,9 @@ dashboard before the demo (or use whatever accounts are already provisioned):
 | Officer  | `officer@landvision.demo`     | `LandVision#123`      |
 | Reviewer | `reviewer@landvision.demo`    | `LandVision#123`      |
 
-> The role is set via Supabase user_metadata `role: 'officer'` or
-> `role: 'reviewer'` at signup time. The client reads it on login and
-> redirects accordingly.
+> Newly registered accounts default to `role: 'officer'`. Reviewer accounts
+> must be assigned manually via the Supabase dashboard (`app_metadata.role: 'reviewer'`).
+> The client reads the role on login and redirects accordingly.
 
 ---
 
@@ -150,5 +150,5 @@ with a Retry button — point this out as part of the hardening work.
 | First click takes ~50 s, then works             | Render free-tier cold start            | Wait — the second click is instant. Mention this is the free tier.   |
 | Dashboard shows "Couldn't reach backend"        | CORS misconfigured or backend down     | Check `CLIENT_ORIGIN` on Render includes the Vercel URL exactly.      |
 | Map is blank for a village                     | `seedPlots` not run for that DB        | Run `npm run seed:plots` against the production Postgres.             |
-| Login fails with "User role not configured"    | Supabase user_metadata missing `role`  | In Supabase dashboard → Auth → Users → edit the user → set `role` in `user_metadata`. |
+| Login fails with "User role not configured"    | Supabase metadata missing `role`       | In Supabase dashboard → Auth → Users → edit the user → set `role` in `app_metadata` (`{"role": "reviewer"}` or `{"role": "officer"}`). |
 | Upload returns 413                              | File > 10 MB                           | Use a smaller scan; the limit is set in `routes/documents.ts`.        |

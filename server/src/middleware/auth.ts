@@ -6,8 +6,12 @@ export interface AuthenticatedRequest extends Request {
   user?: {
     id: string;
     email: string;
+    role: 'officer' | 'reviewer' | 'admin';
+    app_metadata?: {
+      role?: 'officer' | 'reviewer' | 'admin';
+    };
     user_metadata?: {
-      role?: 'officer' | 'reviewer';
+      role?: 'officer' | 'reviewer' | 'admin';
     };
   };
 }
@@ -51,11 +55,18 @@ export const requireAuth = async (
       return;
     }
 
+    // reviewer/admin roles are assigned manually via the Supabase dashboard (app_metadata) until an admin UI exists.
+    // Read role strictly from app_metadata (admin-assigned only); user_metadata is user-writable and untrusted.
+    const role: 'officer' | 'reviewer' | 'admin' =
+      (data.user.app_metadata?.role as 'officer' | 'reviewer' | 'admin') || 'officer';
+
     // Attach user info to request
     req.user = {
       id: data.user.id,
       email: data.user.email || '',
-      user_metadata: data.user.user_metadata as { role?: 'officer' | 'reviewer' } | undefined,
+      role,
+      app_metadata: { role },
+      user_metadata: { role },
     };
 
     next();

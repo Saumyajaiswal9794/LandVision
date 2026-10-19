@@ -43,8 +43,8 @@ export default function LoginPage() {
         return;
       }
 
-      // Get the user's role from metadata
-      const userRole = data.user.user_metadata?.role;
+      // Get the user's role from app_metadata (falling back to user_metadata or default officer)
+      const userRole = (data.user.app_metadata?.role || data.user.user_metadata?.role || 'officer') as 'officer' | 'reviewer';
 
       if (!userRole) {
         setError('User role not configured. Please contact support.');

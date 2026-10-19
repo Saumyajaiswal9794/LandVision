@@ -65,7 +65,7 @@ export function NavBarWrapper({ children }: { children?: React.ReactNode }) {
         return;
       }
 
-      const userRole = data.session.user?.user_metadata?.role as 'officer' | 'reviewer' | null;
+      const userRole = (data.session.user?.app_metadata?.role || data.session.user?.user_metadata?.role || 'officer') as 'officer' | 'reviewer' | null;
       setRole(userRole);
       setLoading(false);
     };
@@ -75,7 +75,7 @@ export function NavBarWrapper({ children }: { children?: React.ReactNode }) {
     // Listen for auth changes
     const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
       if (session) {
-        const r = session.user?.user_metadata?.role as 'officer' | 'reviewer' | null;
+        const r = (session.user?.app_metadata?.role || session.user?.user_metadata?.role || 'officer') as 'officer' | 'reviewer' | null;
         setRole(r);
       } else {
         setRole(null);

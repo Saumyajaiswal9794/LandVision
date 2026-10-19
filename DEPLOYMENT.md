@@ -28,6 +28,10 @@ You must also have already created the Supabase **storage bucket** named
 `land-records` and the `plots` PostGIS table (see
 `server/src/db/migrations/001_create_plots_table.sql`).
 
+> **User Roles & Security:** Newly signed-up users default to the `officer` role.
+> Reviewer (and admin) accounts must be configured via `app_metadata` (admin-only)
+> in the Supabase Dashboard: **Authentication → Users → select user → User Details → edit `app_metadata` → add `{"role": "reviewer"}`**.
+
 ---
 
 ## 1. Backend → Render

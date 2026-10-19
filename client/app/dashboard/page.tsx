@@ -68,8 +68,8 @@ function DashboardContent() {
       return [];
     }
     const token = sessionData.session.access_token;
-    const userRole = sessionData.session.user?.user_metadata?.role;
-    setRole(userRole || null);
+    const userRole = sessionData.session.user?.app_metadata?.role || sessionData.session.user?.user_metadata?.role || 'officer';
+    setRole(userRole);
 
     const res = await fetch(`${API_BASE_URL}/api/documents`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -104,8 +104,8 @@ function DashboardContent() {
       }
 
       const token = sessionData.session.access_token;
-      const userRole = sessionData.session.user?.user_metadata?.role;
-      setRole(userRole || null);
+      const userRole = sessionData.session.user?.app_metadata?.role || sessionData.session.user?.user_metadata?.role || 'officer';
+      setRole(userRole);
 
       let url = `${API_BASE_URL}/api/documents`;
       if (filter) {

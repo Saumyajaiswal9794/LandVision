@@ -1,14 +1,14 @@
 import { Response, NextFunction } from 'express';
 import { AuthenticatedRequest } from './auth';
 
-export const requireRole = (allowedRoles: ('officer' | 'reviewer')[]) => {
+export const requireRole = (allowedRoles: ('officer' | 'reviewer' | 'admin')[]) => {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
     if (!req.user) {
       res.status(401).json({ error: 'Authentication required' });
       return;
     }
 
-    const userRole = req.user.user_metadata?.role;
+    const userRole = req.user.role || req.user.app_metadata?.role || req.user.user_metadata?.role;
 
     if (!userRole) {
       res.status(403).json({ 
