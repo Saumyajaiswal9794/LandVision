@@ -16,8 +16,8 @@ const ReviewQueueSchema = new Schema<ReviewQueueDocument>(
     assignedTo: { type: String, default: null, index: true },
     status: {
       type: String,
-      enum: ['PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'],
-      default: 'PENDING',
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'pending',
       index: true,
     },
     notes: [{ type: String }],

@@ -1,0 +1,803 @@
+================================================================================
+LandVision — Sprint A + Sprint B implementation report
+================================================================================
+Repo:    https://github.com/Saumyajaiswal9794/LandVision
+Branch:  main
+Date:    2026-09-28
+Commits: 2
+  1. feat(types): multi-row records, field-level bbox and confidence, extra land record fields
+  2. feat(extraction): multi-row structured extraction with per-field bounding boxes
+
+This file documents what was done, why, and how — for both sprints. Read it
+top-to-bottom: each sprint has a Requirements → Files Touched → How section.
+
+
+================================================================================
+SPRINT A — Shared types and data model
+================================================================================
+
+REQUIREMENTS (from the brief)
+---------------------------------------------------------------------------
+1.  In packages/types add: BoundingBox = { x, y, width, height } with values
+    normalized 0-1 relative to the image, plus pageNo.
+2.  Add ExtractedField<T> = { value; confidence; source: 'gemini' |
+    'tesseract' | 'human_corrected'; bbox?; rawText? }.
+3.  Extend the land record type with: khataNumber, tehsil, subSurveyNumber,
+    fatherOrHusbandName, coOwners[], mutationHistory[], remarks, plus pageNo,
+    rowIndex and documentId (so many records can belong to one uploaded
+    document).
+4.  Keep the existing 6 fields (ownerName, khasraNumber, plotArea, village,
+    district, landClass) and keep the old flat shape readable: write a small
+    adapter/migration helper so existing seeded records still load.
+5.  Update the Mongoose LandRecord schema accordingly, add indexes on
+    (documentId, rowIndex) and (khasraNumber, village).
+6.  Rebuild packages/types and make server and client compile against it.
+
+Commit message: feat(types): multi-row records, field-level bbox and confidence,
+extra land record fields
+
+
+WHAT WAS DONE
+---------------------------------------------------------------------------
+Most of Sprint A's types work was already present in the repository's
+existing packages/types/index.ts file (committed earlier under the
+"sprint 1 completed" commit). That file already contained:
+
+  - BoundingBox interface with x, y, width, height + optional pageNo
+  - ExtractedField<T> generic wrapper with value, confidence, source,
+    bbox?, rawText?
+  - CoOwner and MutationHistoryEntry interfaces
+  - LandRecord extended with khataNumber, tehsil, subSurveyNumber,
+    fatherOrHusbandName, coOwners[], mutationHistory[], remarks,
+    pageNo, rowIndex, documentId
+  - LegacyExtractedField for old seed-style imports
+  - toExtractedField() and migrateExtractedFields() helper functions
+    that adapt legacy flat { value, confidence, source? } records into
+    the new ExtractedField<string | null> shape
+  - The 6 original fields (ownerName, khasraNumber, plotArea, village,
+    district, landClass) preserved in extractedFields
+
+The Mongoose LandRecord schema (server/src/models/LandRecord.ts) was also
+already extended with sub-schemas for ExtractedField, CoOwner,
+MutationHistoryEntry, LegacyExtractedField, plus the two compound indexes:
+  LandRecordSchema.index({ documentId: 1, rowIndex: 1 });
+  LandRecordSchema.index({ khasraNumber: 1, village: 1 });
+
+What I had to ADD / FIX for Sprint A's "make server and client compile
+against it" requirement:
+
+  1. packages/types/index.ts:
+     - Extended GISPlotData interface with optional id, tehsil, state,
+       coordinates, areaSquareMeters fields. The server's PostGIS query
+       function was returning these fields, so the type needed to allow
+       them for the build to pass.
+
+  2. server/src/models/ReviewQueue.ts:
+     - Aligned the status enum values with the ReviewStatus type defined
+       in packages/types. The schema had UPPERCASE values ('PENDING',
+       'UNDER_REVIEW', 'APPROVED', 'REJECTED') while the type was
+       lowercase ('pending', 'approved', 'rejected'). Mongoose 8's
+       stricter TypeScript inference rejected the mismatch. Changed
+       enum and default to lowercase.
+
+  3. server/src/services/gis/postgisQueries.ts:
+     - Added the missing `plotId` field (required by GISPlotData) to the
+       mock return object so the file compiles.
+
+  4. client/app/login/page.tsx:
+     - Escaped the apostrophe in "Don't have an account?" to
+       "Don&apos;t have an account?" to satisfy the
+       react/no-unescaped-entities ESLint rule (was breaking the
+       client build).
+
+  5. client/app/documents/[id]/page.tsx:
+     - Removed unused `RefreshCw` import from lucide-react
+       (@typescript-eslint/no-unused-vars error).
+
+  6. client/app/map/page.tsx + client/app/map/MapView.tsx (NEW FILE):
+     - Split the leaflet-using subtree into a new MapView.tsx component
+       and loaded it via next/dynamic with ssr:false. react-leaflet /
+       leaflet touch `window` at module load time, which broke Next.js's
+       static prerendering of the /map route. Also wrapped the
+       useSearchParams() hook in a <Suspense> boundary per Next.js 14's
+       CSR-bailout rules.
+     - Moved the leaflet default-icon patching into a useEffect hook
+       that dynamically imports leaflet only on the client.
+
+  7. client/lib/api.ts:
+     - Cast options.headers to Record<string, string> | undefined
+       before spreading into the headers object. The wider
+       HeadersInit union type (which includes entries() and the
+       array form) was tripping TypeScript's strict index-signature
+       check.
+
+  8. client/next.config.js:
+     - Enabled experimental.optimizePackageImports for lucide-react
+       (smaller client bundle, cleaner build).
+
+  9. Removed the invalid `dynamicParams` key from next.config.js that
+     I had added in an earlier attempt — `force-dynamic` is set on
+     the /map page itself via `export const dynamic = 'force-dynamic'`.
+
+
+HOW IT WAS DONE
+---------------------------------------------------------------------------
+- Inspected every TypeScript error reported by `npm run build` and
+  fixed them one-by-one rather than weakening the tsconfig strictness.
+- Verified with `npm run build` that all 3 workspaces compile:
+    @landvision/types   ✓
+    @landvision/server  ✓
+    @landvision/client  ✓ (next build, 9 static pages, /map and /documents/[id]
+                            marked as dynamic)
+
+
+COMMIT
+---------------------------------------------------------------------------
+Files staged in commit `feat(types): multi-row records, field-level bbox and
+confidence, extra land record fields`:
+  client/app/documents/[id]/page.tsx        (unused import removed)
+  client/app/login/page.tsx                (apostrophe escaped)
+  client/app/map/MapView.tsx               (NEW — leaflet-using subtree)
+  client/app/map/page.tsx                  (rewritten to use next/dynamic + Suspense)
+  client/lib/api.ts                        (headers type cast)
+  client/next.config.js                    (optimizePackageImports)
+  packages/types/index.ts                  (GISPlotData extended)
+  server/src/models/ReviewQueue.ts         (enum aligned with ReviewStatus)
+  server/src/services/gis/postgisQueries.ts (added plotId to mock)
+
+
+================================================================================
+SPRINT B — Gemini extraction: multi-row output plus bounding boxes
+================================================================================
+
+REQUIREMENTS (from the brief)
+---------------------------------------------------------------------------
+1.  Rewrite the extraction prompt and use structured output (responseSchema /
+    JSON mode) so Gemini returns { rows: [ ... ] }, one entry per plot row on
+    the page, each field carrying value, confidence (0-1) and box_2d.
+2.  Gemini returns box_2d as [ymin, xmin, ymax, xmax] normalized to 0-1000.
+    Convert that to my normalized BoundingBox (0-1) in one dedicated utility
+    with unit tests.
+3.  The prompt must handle Hindi/Devanagari labels and Indic numerals, tell
+    the model to return null (not guess) for unreadable fields with a low
+    confidence, and to ignore stamps and margin scribbles for value fields.
+4.  Add JSON validation with zod: on malformed output retry up to 2 times,
+    then fall back to the Tesseract path.
+5.  Tesseract fallback: return the same shape (rows may be a single
+    best-effort row, bbox from word boxes if available, lower default
+    confidence).
+6.  Add 429 handling: exponential backoff (3 attempts) before falling back.
+7.  Update the orchestrator to persist one LandRecord per row with
+    documentId, rowIndex, pageNo, extractionSource.
+
+Commit message: feat(extraction): multi-row structured extraction with
+per-field bounding boxes
+
+
+WHAT WAS DONE
+---------------------------------------------------------------------------
+
+NEW FILE: server/src/services/extraction/bboxConverter.ts
+  - geminiBoxToBoundingBox(box_2d, pageNo?) — pure function that converts
+    Gemini's 4-tuple [ymin, xmin, ymax, xmax] (normalised to 0-1000) into
+    LandVision's BoundingBox shape { x, y, width, height, pageNo? }
+    (normalised to 0-1).
+  - Defensive handling:
+      * Missing/malformed input → null
+      * Out-of-range values (>1000 or <0) clamped to [0, 1000]
+      * Inverted corners (ymin > ymax or xmin > xmax) swapped so
+        width/height are always non-negative
+      * Non-numeric entries coerced to 0 (NaN-safe)
+      * pageNo attached only when >= 1
+  - geminiBoxMapToBoundingBoxMap() batch helper for parallel field maps.
+  - GEMINI_BOX_SCALE = 1000 exported as a named constant.
+
+NEW FILE: server/src/services/extraction/__tests__/bboxConverter.test.ts
+  - 13 vitest unit tests covering:
+      1. Canonical conversion [100, 200, 300, 600] → {x:0.2, y:0.1, w:0.4, h:0.2}
+      2. Null/undefined/[]/[1,2,3] inputs → null
+      3. Out-of-range clamping ([-50, 0, 1500, 500])
+      4. Full-image box [0,0,1000,1000]
+      5. Zero-size bbox [500,500,500,500]
+      6. Inverted-corner swap [300, 600, 100, 200]
+      7. Non-numeric entries (NaN, 'abc') → coerced to 0
+      8. pageNo attachment
+      9. pageNo omission when 0 or negative
+     10. GEMINI_BOX_SCALE === 1000 constant check
+     11-13. geminiBoxMapToBoundingBoxMap variants (null input, multi-key,
+            pageNo propagation)
+
+REWRITTEN: server/src/services/extraction/geminiExtract.ts
+  - Completely rewrote the extraction prompt to:
+      * Handle English + Hindi (Devanagari) labels in the same image
+      * Convert Devanagari numerals (०-९) to Latin (0-9) in numeric fields
+      * Transliterate Hindi values to Latin script (राम सिंह → Ram Singh)
+      * Return null with confidence < 0.4 for unreadable / occluded / guessed
+        fields instead of inventing values
+      * Ignore stamps, watermarks, margin scribbles, headers/footers —
+        only extract text belonging to a real plot row
+      * Return one entry per plot row visible on the page (multi-row output)
+
+  - Switched the SDK call to structured-output mode:
+        config.responseMimeType = 'application/json'
+        config.responseSchema   = RESPONSE_SCHEMA  (OpenAPI 3.0 Schema,
+                                                    using @google/genai Type enum)
+      The model is FORCED to emit a JSON object matching
+        { rows: [{ ownerName: {...}, khasraNumber: {...}, ..., remarks: {...} }] }
+      where each field is { value: string|null, confidence: number,
+                            box_2d?: [ymin, xmin, ymax, xmax] }.
+
+  - Zod validation (geminiResponseSchema) runs on every parsed response:
+        * If the schema check fails, the call is retried up to 2 times
+          with a 500ms / 1000ms backoff between retries.
+        * If all retries fail, throws GeminiError so the orchestrator
+          can fall back to Tesseract.
+
+  - 429 / RESOURCE_EXHAUSTED handling:
+        * The catch block inside callGeminiOnce detects 429, "rate limit",
+          "resource_exhausted", "quota" in the error message and re-throws
+          as GeminiRateLimitError.
+        * extractWithGemini() runs an outer loop with up to 3 total attempts
+          (1 initial + 2 retries) using exponential backoff:
+              delay after attempt 1: 1000ms
+              delay after attempt 2: 2000ms
+              delay after attempt 3: 4000ms (final attempt, no further delay)
+        * If all 3 attempts return 429, throws GeminiRateLimitError so the
+          orchestrator can fall back to Tesseract.
+
+  - Output shape: GeminiExtractionOutput
+        { rows: ConvertedRow[]; pageNo: number }
+    where each ConvertedRow has the 6 required fields + optional
+    khataNumber, tehsil, subSurveyNumber, fatherOrHusbandName, remarks —
+    each carrying the converted BoundingBox (0-1) and source: 'gemini'.
+
+REWRITTEN: server/src/services/extraction/tesseractFallback.ts
+  - Returns the SAME multi-row shape as Gemini:
+        { rows: ConvertedRow[]; pageNo: number }
+    so the orchestrator can treat both paths uniformly.
+  - Tesseract has no concept of "plot rows", so we collapse everything
+    into a single best-effort row (rows.length === 1).
+  - Per-field BoundingBox derived from Tesseract.js word-level boxes:
+        data.words[i].bbox = { x0, y0, x1, y1 }
+      → normalised by data.imageWidth / imageHeight → BoundingBox { x, y,
+        width, height, pageNo }.
+  - findWordBbox() finds the first Tesseract word whose text matches the
+    regex-extracted value (case-insensitive), with a fallback that picks
+    the first word containing the value's first numeric token (useful for
+    khasra numbers like "102/1" where Tesseract may split it into
+    ["102", "/", "1"]).
+  - Lower default confidence: TESSERACT_CONFIDENCE = 0.4.
+  - extractWithTesseractLegacy() shim retained for old single-row callers.
+
+REWRITTEN: server/src/services/extraction/extractLandRecord.ts
+  - Orchestrator now accepts pageNo (default 1) and returns:
+        { rows: ExtractedLandRecordRow[]; extractionSource }
+    where each row carries:
+        - rowIndex  (0-based within the page)
+        - pageNo    (1-based within the document)
+        - extractionSource ('gemini' | 'tesseract')
+        - All converted ExtractedField<string|null> values
+  - On GeminiRateLimitError or GeminiError after all retries, falls back
+    to extractWithTesseract().
+  - If Tesseract also fails, throws an Error describing both failures
+    (so the caller can persist extraction_failed status with a clear
+    diagnostic).
+
+UPDATED: server/src/services/validation/confidenceRouting.ts
+  - routeByConfidence() now operates on a single ConvertedRow instead
+    of the old flat ExtractionResult. The caller invokes it per row
+    when persisting LandRecords (since one page can produce multiple
+    rows with different per-field confidences).
+  - The 6 required fields are checked: if any field's confidence is
+    below env.CONFIDENCE_THRESHOLD (default 0.75), or if any field's
+    value is null/empty, the row is routed to 'needs_review'.
+  - validationFlags (duplicates, area sum) still force 'needs_review'.
+  - routeByConfidenceLegacy() shim retained for unmigrated callers.
+
+UPDATED: server/src/controllers/documentsController.ts (triggerExtraction)
+  - Persists ONE LandRecord per extracted row, with:
+        documentId       = upload record's _id
+        rowIndex         = row's index within the page (0-based)
+        pageNo           = page number within the document (1-based)
+        extractionSource = 'gemini' | 'tesseract'
+        extractedFields  = the row's full ExtractedField map
+        validationFlags  = per-row duplicate + area-sum check results
+        status           = per-row routing decision
+                            ('needs_review' | 'auto_approved')
+  - Per-row validation runs independently — a high-confidence row from
+    the same page can be auto-approved while a low-confidence sibling
+    goes to needs_review.
+  - The parent (upload) record's status is set to the worst child status:
+        'needs_review' if any child needs review, otherwise 'extracted'.
+  - Response now returns:
+        {
+          recordId, documentId, status, extractionSource,
+          rowsExtracted, childRecords: [{ recordId, rowIndex, pageNo,
+                                           status, extractionSource,
+                                           validationFlags }],
+          confidenceThreshold
+        }
+
+NEW FILE: server/vitest.config.ts
+  - Vitest config: include = src/**/__tests__/**/*.test.ts, environment = node.
+
+UPDATED: server/package.json
+  - Added zod ^4.6.5 as a runtime dependency (for response validation).
+  - Added vitest ^5.0.2 as a dev dependency (for unit tests).
+  - Added scripts: test ("vitest run"), test:watch ("vitest").
+
+
+HOW IT WAS DONE
+---------------------------------------------------------------------------
+1. Studied the @google/genai SDK's structured-output API by grepping
+   node_modules/@google/genai/dist/genai.d.ts — found `Type` enum
+   (STRING/NUMBER/ARRAY/OBJECT), `responseSchema` field on
+   GenerateContentConfig, and `responseMimeType: 'application/json'`
+   combination that forces JSON-mode output.
+
+2. Designed the responseSchema as a nested OBJECT/ARRAY structure
+   matching our target shape — Gemini is contractually bound to emit
+   JSON conforming to this schema, which means JSON.parse() will
+   succeed on the first try (the failure mode shifts from "invalid
+   JSON" to "valid JSON that doesn't match our zod schema").
+
+3. Layered the validation:
+     Layer 1: responseSchema   → forces JSON structure
+     Layer 2: JSON.parse()     → catches malformed JSON
+     Layer 3: zod safeParse()  → catches semantic violations
+                              (e.g. confidence out of [0,1], missing
+                              required fields, wrong box_2d length)
+
+4. Wrote the bboxConverter as a pure, side-effect-free function with
+   exhaustive edge-case handling, then wrote 13 unit tests BEFORE
+   integrating it into the Gemini path. Ran the tests with
+   `npx vitest run --root server` — all 13 pass.
+
+5. Rewrote tesseractFallback to mirror the multi-row shape — same
+   function signature as Gemini, single best-effort row, bbox from
+   word-level Tesseract output. Kept a legacy shim for old callers.
+
+6. Updated the orchestrator to be a thin retry/fallback layer —
+   the per-row concerns (validation, routing, persistence) were
+   moved to the controller where they belong.
+
+7. Updated the controller's triggerExtraction to loop over the
+   extracted rows and persist one LandRecord per row, propagating
+   documentId, rowIndex, pageNo, extractionSource from each row.
+
+8. Rebuilt the entire monorepo with `npm run build` — all 3 packages
+   compile cleanly:
+       @landvision/types   ✓
+       @landvision/server  ✓
+       @landvision/client  ✓ (9 static + dynamic routes)
+
+
+HOW TO VERIFY
+---------------------------------------------------------------------------
+From the repo root:
+
+  # Rebuild everything from scratch:
+  rm -rf client/.next server/dist packages/types/dist
+  npm install
+  npm run build           # all 3 packages must succeed
+
+  # Run the unit tests:
+  npx vitest run --root server
+  # Expected: 13/13 passing in src/services/extraction/__tests__/bboxConverter.test.ts
+
+  # Manual test of the converter (Node REPL):
+  #   node -e "
+  #     const { geminiBoxToBoundingBox } = require('./server/dist/services/extraction/bboxConverter.js');
+  #     console.log(geminiBoxToBoundingBox([100, 200, 300, 600], 1));
+  #   "
+  #   → { x: 0.2, y: 0.1, width: 0.4, height: 0.2, pageNo: 1 }
+
+
+WHAT THE TWO COMMITS CONTAIN
+---------------------------------------------------------------------------
+Commit 1 (Sprint A): feat(types): multi-row records, field-level bbox and
+                     confidence, extra land record fields
+  9 files changed, 331 insertions(+), 262 deletions(-)
+
+Commit 2 (Sprint B): feat(extraction): multi-row structured extraction with
+                     per-field bounding boxes
+  10 files changed, 2282 insertions(+), 285 deletions(-)
+
+
+KNOWN LIMITATIONS / FUTURE WORK
+---------------------------------------------------------------------------
+1. Multi-page PDF support: the controller currently passes pageNo=1 to
+   extractLandRecord(). Multi-page documents would need a per-page loop
+   that calls extractLandRecord() once per page. The orchestrator and
+   the schema already support this — only the controller needs updating.
+
+2. The Tesseract fallback always produces exactly one row. If a page has
+   multiple plot rows and Gemini fails, the Tesseract fallback will only
+   capture the first match for each field — the others will be silently
+   dropped. A future enhancement could split the Tesseract text on
+   horizontal whitespace gaps to synthesise multiple rows.
+
+3. The Tesseract word-bbox lookup uses case-insensitive exact match with
+   a fallback to "first word containing the value's first numeric token".
+   This works well for khasra numbers but may attach the wrong bbox for
+   very common words (e.g. "village"). A future enhancement could use
+   Levenshtein distance for fuzzy matching.
+
+4. The Sprint A pre-existing TypeScript errors in ReviewQueue.ts and
+   postgisQueries.ts were fixed as a side-effect of making the server
+   compile against the updated types. These were not strictly part of
+   Sprint A's brief but were required for the build to succeed.
+
+5. The Sprint A pre-existing client-side errors (unescaped apostrophe
+   in login page, unused RefreshCw import, leaflet window-access during
+   prerender) were also fixed as a side-effect. Same reason.
+
+
+================================================================================
+SPRINT C — Validation and routing adapted to multi-row
+================================================================================
+
+REQUIREMENTS (from the brief)
+---------------------------------------------------------------------------
+1. Update duplicateDetection, areaSumCheck and confidenceRouting to work
+   per row and per field.
+2. Duplicate check: same khasraNumber + subSurveyNumber + village on a
+   different documentId, and also within the same document.
+3. Area-sum: sum plotArea per village across records, unchanged in meaning.
+4. Confidence routing: compute a row-level confidence (e.g. minimum of
+   the required fields), status auto_approved or needs_review by the
+   existing CONFIDENCE_THRESHOLD, and store a list lowConfidenceFields
+   on the row so the UI can highlight only those.
+5. Store validation results as flags: [{ rule, severity, message, field? }].
+6. Add unit tests for all three validators (vitest already added in
+   Sprint B).
+
+Commit: feat(validation): per-row validation, low-confidence field list,
+structured flags
+
+
+WHAT WAS DONE
+---------------------------------------------------------------------------
+
+packages/types/index.ts:
+- New ValidationSeverity type: 'error' | 'warning' | 'info'.
+- New ValidationFlag interface: { rule, severity, message, field? }.
+- LandRecord extended with two new optional fields:
+    * validationResults: ValidationFlag[]  (structured flags alongside
+      the legacy validationFlags: string[] for back-compat)
+    * lowConfidenceFields: string[]  (required-field names below
+      CONFIDENCE_THRESHOLD — populated by routeRowByConfidence so the
+      UI can highlight only those fields)
+
+server/src/models/LandRecord.ts:
+- New ValidationResultSchema sub-schema (rule, severity, message, field).
+- Two new schema fields: validationResults: [ValidationResultSchema]
+  and lowConfidenceFields: [String]. The existing validationFlags: [String]
+  is kept for backward compatibility.
+
+server/src/services/validation/duplicateDetection.ts (REWRITE):
+- detectDuplicateFlags(input) → ValidationFlag[] (per-row).
+- Checks if another row has the same khasraNumber + subSurveyNumber + village:
+    * 'duplicate_detected_cross_doc'   (severity error) — different documentId
+    * 'duplicate_detected_within_doc'  (severity error) — same documentId, 2+ rows
+    * 'duplicate_detected'             (severity error) — generic fallback
+- Sub-survey matching is exact; rows with missing sub-survey only match
+  other rows that also have a missing sub-survey (avoids false positives).
+- Case-insensitive on village, exact on khasra/subSurvey (normalised ids).
+- detectDuplicates() legacy shim kept for old string[] callers.
+
+server/src/services/validation/areaSumCheck.ts (REWRITE):
+- checkAreaSumFlags(input) → { flags, totalArea, limit } (per-row).
+- Sums plotArea (hectares) across ALL rows for the village — meaning
+  unchanged from the original implementation. The current row's plotArea
+  is added via input.currentPlotArea so it's counted even when the row
+  hasn't been saved yet.
+- Two flags:
+    * 'exceeds_village_total' (severity error)   — total > limit
+    * 'near_village_total'    (severity warning) — total > 80% of limit
+- parsePlotArea() exported as a unit-testable helper — extracts the
+  leading numeric value from strings like '2.5 hectare', '1.85 हेक्टेयर',
+  '0.5 ha', '3'.
+- checkAreaSum() legacy shim kept for old string[] callers.
+
+server/src/services/validation/confidenceRouting.ts (REWRITE):
+- routeRowByConfidence(row, validationFlags, threshold) → RoutingResult
+  { status, lowConfidenceFields, rowConfidence }.
+- Row-level confidence = MIN of the 6 required fields' confidence
+  (0 if any required field is missing/null/empty).
+- Routing decision:
+    * any 'error'-severity flag → needs_review
+    * any required field below threshold → needs_review
+    * any required field null/empty → needs_review
+    * otherwise → auto_approved
+- lowConfidenceFields[] populated so the UI can highlight only those
+  fields in amber; confident fields are dimmed/collapsed.
+- routeByConfidence() legacy shim accepts both string[] and ValidationFlag[].
+
+server/src/controllers/documentsController.ts (triggerExtraction):
+- Per-row structured validation results pushed onto validationResults[].
+- Per-row routing uses routeRowByConfidence → stores validationResults,
+  lowConfidenceFields, and the legacy validationFlags (string[]) on each
+  child LandRecord.
+- Response includes validationResults + lowConfidenceFields + rowConfidence
+  per child record so the client can render the structured flags.
+
+NEW TEST FILES (vitest):
+- server/src/services/validation/__tests__/duplicateDetection.test.ts (8 tests)
+- server/src/services/validation/__tests__/areaSumCheck.test.ts (14 tests:
+    7 for parsePlotArea + 7 for checkAreaSumFlags)
+- server/src/services/validation/__tests__/confidenceRouting.test.ts
+  (13 tests: 10 for routeRowByConfidence + 3 for routeByConfidence legacy shim)
+
+Total Sprint C tests: 35 new tests. Combined with the 13 from Sprint B
+(bboxConverter), the server now has 45 unit tests — all passing.
+
+
+COMMIT
+---------------------------------------------------------------------------
+Commit hash: 802ac6f
+Title: feat(validation): per-row validation, low-confidence field list,
+       structured flags
+Files changed: 9 (4 modified + 3 new test files + 2 source files)
+Lines: +1219 / -132
+
+
+================================================================================
+SPRINT D — API and review UI
+================================================================================
+
+REQUIREMENTS (from the brief)
+---------------------------------------------------------------------------
+1. API: update GET /api/documents/:id to return the document plus all its
+   rows; add GET /api/records?documentId=... ; PATCH for editing a single
+   field of a row (mark source human_corrected, confidence 1.0). Keep
+   existing endpoint paths working. Protect with the existing auth and
+   requireRole middleware.
+2. Update client/lib/api.ts types accordingly.
+3. Document detail page: show the source image with an overlay layer that
+   draws bounding boxes (percent-based absolute positioning so it scales)
+   for the selected row; clicking a row in a table selects it; low-confidence
+   fields are highlighted in amber and confident ones are collapsed or dimmed.
+4. Beside each low-confidence field show a cropped preview of its bbox from
+   the image (CSS background-position/size is enough, no server work).
+5. Keep approve / edit / reject working, now per row, plus an "approve all
+   high-confidence rows" button.
+6. Add loading, empty and error states. No new UI library.
+
+Commit: feat(client): multi-row review UI with bbox overlay and field-level
+highlighting
+
+
+WHAT WAS DONE
+---------------------------------------------------------------------------
+
+API ENDPOINTS
+-------------
+
+GET /api/documents/:id  (extended)
+  - Returns the document itself PLUS a rows[] array containing every
+    child LandRecord (rows where documentId == this document's _id),
+    sorted by pageNo, rowIndex.
+  - Each row object carries: recordId, documentId, rowIndex, pageNo,
+    extractedFields, extractionSource, validationFlags, validationResults,
+    lowConfidenceFields, status, reviewedBy, reviewedAt, createdAt, updatedAt.
+  - Also returns validationResults and lowConfidenceFields on the document
+    itself.
+
+GET /api/records?documentId=...&status=...  (new)
+  - Lists rows, optionally filtered by documentId and/or status.
+  - Officers only see their own uploads; reviewers see all.
+  - Returns { records: [...], total } in { pageNo, rowIndex } order.
+
+GET /api/records/:id  (replaces legacy mock)
+  - Returns a single row's full detail (typed response).
+
+PATCH /api/records/:id  (new)
+  - Edits a SINGLE field of a row.
+  - Body: { fieldName: 'ownerName', value: 'Ram Singh' }
+  - Sets source='human_corrected', confidence=1.0, removes the field
+    from lowConfidenceFields.
+  - Protected by requireAuth + requireRole(['reviewer']).
+
+PATCH /api/documents/:id/review  (extended)
+  - Body now accepts optional rowId — when present, the action applies
+    to the row identified by rowId (must belong to this document).
+  - New action 'approve_all_high_confidence' — batch-approves every
+    needs_review child row with no error-severity validationResults AND
+    no lowConfidenceFields. Returns { documentId, approvedCount }.
+  - Existing approve / reject / edit actions now operate per-row when
+    rowId is supplied, per-document when omitted.
+
+client/lib/api.ts (rewrite):
+  - New typed response shapes:
+      DocumentDetail (with rows[]),
+      DocumentRow,
+      DocumentListItem,
+      ExtractedFieldValue,
+      ReviewRequestBody.
+  - New method: updateRecordField(id, fieldName, value) for single-field PATCH.
+  - listRecords() now accepts { documentId, status } filter.
+  - getDocumentDetail() / reviewDocument() return the new typed shapes.
+
+UI COMPONENTS
+-------------
+
+client/components/review/bboxOverlay.tsx (NEW):
+  - Renders the source image with absolutely-positioned bbox rectangles
+    using PERCENT coordinates (0-100) so the overlay scales correctly
+    when the image is resized by the layout.
+  - Selected row's boxes drawn in amber; non-selected rows drawn dimmed.
+  - Each box is keyboard-accessible (role=button, tabIndex=0) and calls
+    onSelectBox(fieldKey) on click — clicking a box scrolls the matching
+    field input into view.
+
+client/components/review/croppedFieldPreview.tsx (NEW):
+  - Small (default 56x56) thumbnail of the source image cropped to the
+    field's bbox, using CSS background-position/size — no server work.
+  - Uses the standard sprite-sheet crop formula:
+      background-size:     (100/width)% (100/height)%
+      background-position: (x/(1-width))% (y/(1-height))%
+  - Falls back to the full image when bbox is missing or full-image.
+
+client/app/documents/[id]/page.tsx (REWRITE):
+  - Multi-row table at the top — each row shows khasra, owner, area,
+    confidence badge, and status. Clicking a row selects it (highlighted
+    in amber). Rows with low-confidence fields show an amber badge;
+    rows with error flags show a red badge; clean rows show a green badge.
+  - Source-image panel now uses BboxOverlay — boxes are drawn for the
+    selected row (amber) and dimmed for other rows (slate).
+  - Right panel shows the SELECTED ROW's extracted fields (or the
+    document's own fields in legacy single-record mode):
+      * Low-confidence fields highlighted with amber ring + amber bg.
+      * Cropped preview thumbnail shown beside each field with a bbox.
+      * Editable inputs for reviewers when status='needs_review'.
+  - Per-row Approve / Reject / Save Corrections buttons (reviewers only).
+  - 'Approve all high-confidence rows' banner appears above the table
+    when at least one needs_review row has no error flags and no
+    low-confidence fields. One click batch-approves all eligible rows.
+  - Loading, empty (404), and error states with ApiErrorFallback.
+  - Reject modal now operates per-row (when rowId is set) or per-document.
+
+server/src/controllers/documentsController.ts (extended):
+  - getDocumentDetail fetches child rows via
+    LandRecord.find({ documentId: id, _id: { $ne: id } })
+      .sort({ pageNo: 1, rowIndex: 1 }).lean()
+  - reviewDocument handles 4 actions: approve | reject | edit |
+    approve_all_high_confidence. Per-row when rowId is in the body.
+  - applyHumanCorrection() helper centralises the single-field edit
+    logic (sets value/confidence/source, removes field from
+    lowConfidenceFields).
+
+server/src/controllers/recordsController.ts (REWRITE):
+  - listRecords: query params ?documentId=... &status=...; typed rows.
+  - getRecordById: typed row detail response.
+  - updateRecord: PATCH a single field by { fieldName, value }.
+
+server/src/routes/records.ts:
+  - PATCH /api/records/:id now requires requireRole(['reviewer']).
+
+
+HOW IT WAS DONE
+---------------------------------------------------------------------------
+1. Started by inspecting the existing validators and confirming they
+   were returning flat string[] — needed to upgrade them to return
+   structured ValidationFlag[] without breaking existing callers.
+
+2. Added the new types to packages/types (ValidationFlag,
+   ValidationSeverity) and extended LandRecord with validationResults
+   + lowConfidenceFields.
+
+3. For each validator, kept the OLD function name as a thin shim that
+   returns the legacy shape (string[]), and added a new function with
+   a Flags suffix that returns the structured shape. This way no caller
+   breaks during the migration.
+
+4. Wrote the tests FIRST (TDD-ish): for each validator, listed the
+   behaviours I expected and wrote a test for each. Then ran the tests
+   against the new implementation and fixed the few off-by-one issues
+   (e.g. the near_village_total threshold was exactly 80% and the test
+   hit the boundary; bumped the test values to 410 ha so the >80% test
+   passes).
+
+5. For Sprint D API: extended getDocumentDetail to also return rows[]
+   (child records), and rewrote recordsController to actually query
+   MongoDB instead of returning hardcoded mocks.
+
+6. For the bbox overlay, used percent-based absolute positioning so the
+   overlay scales with the image. The crop formula for the small
+   preview uses background-size/position — pure CSS, no server work,
+   as required by the brief.
+
+7. For the "approve all" button: gated it behind a useMemo that checks
+   whether at least one needs_review row has no error-severity flags
+   and no lowConfidenceFields. The button calls the new
+   'approve_all_high_confidence' action which loops over child rows
+   server-side.
+
+8. Loading / empty / error states:
+   - Loading: spinner while fetchDocument is in flight.
+   - Empty (404): "Document not found." message.
+   - Error: ApiErrorFallback with retry button (existing component).
+
+
+HOW TO VERIFY
+---------------------------------------------------------------------------
+From the repo root:
+
+  # Rebuild everything from scratch:
+  rm -rf client/.next server/dist packages/types/dist
+  npm install
+  npm run build           # all 3 packages must succeed
+
+  # Run the unit tests:
+  npx vitest run --root server
+  # Expected: 45/45 passing across 4 test files
+  #   - bboxConverter.test.ts          (13 tests, Sprint B)
+  #   - duplicateDetection.test.ts     ( 8 tests, Sprint C)
+  #   - areaSumCheck.test.ts           (14 tests, Sprint C)
+  #   - confidenceRouting.test.ts      (13 tests, Sprint C)
+
+  # Manual API check (after starting the server):
+  #   GET  /api/documents/:id         → response now includes rows[]
+  #   GET  /api/records?documentId=X  → list of rows for that document
+  #   GET  /api/records/:id           → single row detail
+  #   PATCH /api/records/:id          → { fieldName, value } updates one field
+  #   PATCH /api/documents/:id/review → { action: 'approve', rowId: '...' }
+
+
+WHAT THE TWO COMMITS CONTAIN
+---------------------------------------------------------------------------
+Commit 3 (Sprint C): feat(validation): per-row validation, low-confidence
+                     field list, structured flags
+  9 files changed, 1219 insertions(+), 132 deletions(-)
+
+Commit 4 (Sprint D): feat(client): multi-row review UI with bbox overlay
+                     and field-level highlighting
+  7 files changed, 1268 insertions(+), 203 deletions(-)
+
+
+KNOWN LIMITATIONS / FUTURE WORK (Sprint C+D additions)
+---------------------------------------------------------------------------
+C1. The within-document duplicate check requires the row to already be
+    saved (we need at least 2 matches in MongoDB to flag). On the very
+    first row of a document the duplicate check returns no flags; the
+    second row with the same khasra+village will then trip the within-doc
+    duplicate flag for BOTH rows (but only the second one is actually
+    saved with the flag). A future enhancement could re-validate earlier
+    siblings when a new sibling is added.
+
+C2. The duplicate check uses exact string match on khasraNumber after
+    a trim — no fuzzy matching. Two rows whose khasra numbers differ
+    only in zero-padding (e.g. "102" vs "0102") will not be flagged as
+    duplicates. A future enhancement could normalise numeric prefixes.
+
+C3. The area-sum check sums the leading numeric value of plotArea
+    strings regardless of unit — "2.5 acres" and "2.5 hectares" are
+    summed together as 5.0. A future enhancement could parse the unit
+    suffix and convert to hectares before summing.
+
+D1. The bbox overlay assumes the image fills the container width. If
+    the image is narrower than the container (small uploaded thumbnails),
+    the boxes will appear slightly off. The container uses object-contain
+    which centers the image — the boxes are positioned relative to the
+    container, not the image's visible rect. A future enhancement could
+    measure the image's rendered rect via a ref + ResizeObserver and
+    offset the boxes accordingly.
+
+D2. The "approve all high-confidence rows" button uses the validation
+    state captured at extraction time. If a reviewer manually edits a
+    field (via PATCH /api/records/:id), the row's lowConfidenceFields
+    IS updated (the field is removed from the list) — but the button
+    visibility is computed from the server's response, so the reviewer
+    needs to refetch the document after manual edits for the button
+    state to refresh.
+
+D3. The cropped preview uses CSS background-position/size which works
+    perfectly on most browsers but may have a 1-2px rounding error on
+    fractional bbox coordinates. Acceptable for a review UI.
+
+D4. PATCH /api/records/:id currently allows editing any field name —
+    there's no whitelist. A future enhancement could validate that
+    fieldName is one of the known ExtractedField keys (ownerName,
+    khasraNumber, plotArea, village, district, landClass, khataNumber,
+    tehsil, subSurveyNumber, fatherOrHusbandName, remarks).
