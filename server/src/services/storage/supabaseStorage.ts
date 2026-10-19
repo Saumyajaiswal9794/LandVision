@@ -1,6 +1,6 @@
 import supabaseAdmin from '../../config/supabaseAdmin';
 
-const BUCKET_NAME = 'land-documents';
+const BUCKET_NAME = 'land-records';
 const SIGNED_URL_EXPIRATION = 3600; // 1 hour in seconds
 
 /**

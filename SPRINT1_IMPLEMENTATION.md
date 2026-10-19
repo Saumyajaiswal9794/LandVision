@@ -52,7 +52,7 @@ Sprint 1 successfully implements authentication, role-based access control, and 
 #### Storage & Models
 
 - **`server/src/services/storage/supabaseStorage.ts`** [NEW] - `uploadDocument` function that:
-  - Uploads file buffer to "land-documents" Supabase Storage bucket
+  - Uploads file buffer to "land-records" Supabase Storage bucket
   - Generates unique path with timestamp
   - **✅ FIXED (bugfix pass):** Returns signed URL (not public URL) valid for 1 hour
   - **✅ NEW:** `deleteDocument()` function for orphan cleanup on failure
@@ -212,7 +212,7 @@ NEXT_PUBLIC_API_URL=http://localhost:4000
 - [x] Navigate to /upload page
 - [x] Select PDF file and enter village/district
 - [x] Click submit
-- [x] Verify file appears in Supabase Storage "land-documents" bucket ✅
+- [x] Verify file appears in Supabase Storage "land-records" bucket ✅
 - [x] Verify LandRecord created in MongoDB "landrecords" collection ✅
 - [x] Success message shows recordId ✅
 - [x] **BUGFIX:** File URL is signed URL (accessible even with private bucket) ✅

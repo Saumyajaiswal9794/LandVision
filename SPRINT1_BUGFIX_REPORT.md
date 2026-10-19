@@ -416,7 +416,7 @@ if (!userRole) {
 
 ## Deployment Checklist
 
-- [ ] Verify Supabase bucket "land-documents" exists
+- [ ] Verify Supabase bucket "land-records" exists
 - [ ] Set Supabase Storage bucket to PRIVATE (signed URLs will work)
 - [ ] Set SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY in .env
 - [ ] Set MONGODB_URI and PG_CONNECTION_STRING in .env
