@@ -14,7 +14,6 @@ import errorHandler from './middleware/errorHandler';
 import documentRoutes from './routes/documents';
 import recordRoutes from './routes/records';
 import authRoutes from './routes/auth';
-import validationRoutes from './routes/validation';
 import gisRoutes from './routes/gis';
 
 const app = express();
@@ -44,7 +43,6 @@ app.use(express.json());
 app.use('/api/documents', documentRoutes);
 app.use('/api/records', recordRoutes);
 app.use('/api/auth', authRoutes);
-app.use('/api/validation', validationRoutes);
 app.use('/api/gis', gisRoutes);
 
 // Health Check Route
