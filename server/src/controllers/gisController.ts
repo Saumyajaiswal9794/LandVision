@@ -82,13 +82,3 @@ export const getPlotBoundary = async (req: Request, res: Response): Promise<void
     res.status(500).json({ error: (error as Error).message });
   }
 };
-
-export const updatePlotBoundary = async (req: Request, res: Response): Promise<void> => {
-  try {
-    res.status(200).json({
-      message: 'Plot boundaries updated successfully',
-    });
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-};
