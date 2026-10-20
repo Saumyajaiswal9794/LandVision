@@ -63,31 +63,17 @@ vi.mock('../../services/storage/supabaseStorage', () => ({
   regenerateSignedUrl: vi.fn(async () => 'https://example.com/refreshed-url.jpg'),
 }));
 
-// Mock LandRecord mongoose model
-const mockSave = vi.fn().mockImplementation(function (this: any) {
-  return Promise.resolve({
-    _id: this._id || 'mock-doc-id',
-    filename: this.filename || 'test.jpg',
-    village: this.village || 'Rampur',
-    district: this.district || 'Agra',
-    status: this.status || 'uploaded',
-    uploadedBy: this.uploadedBy || 'officer-1',
-    extractedFields: this.extractedFields || {},
-    save: mockSave,
-  });
-});
-
+// Mock LandRecord mongoose model.
+// The controller calls `new LandRecord(...)`, so the mock must be a constructor.
 vi.mock('../../models/LandRecord', () => {
-  const LandRecordMock: any = vi.fn().mockImplementation((data: any) => ({
-    ...data,
-    _id: 'mock-doc-id',
-    save: mockSave,
-  }));
+  const LandRecordMock: any = vi.fn(function (this: any, data: any) {
+    Object.assign(this, data, { _id: 'mock-doc-id' });
+    this.save = vi.fn().mockResolvedValue(this);
+  });
   LandRecordMock.findById = vi.fn();
   LandRecordMock.find = vi.fn();
   return { LandRecord: LandRecordMock, default: LandRecordMock };
 });
-
 import app from '../../index';
 import { LandRecord } from '../../models/LandRecord';
 
