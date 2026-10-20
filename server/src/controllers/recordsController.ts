@@ -38,7 +38,7 @@ export const listRecords = async (req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
-    const userRole = req.user.user_metadata?.role;
+    const userRole = req.user.role || req.user.app_metadata?.role || req.user.user_metadata?.role;
     const userId = req.user.id;
     const { documentId, status } = req.query;
 
@@ -110,7 +110,7 @@ export const getRecordById = async (req: AuthenticatedRequest, res: Response): P
     }
 
     // Officers can only see their own records.
-    const userRole = req.user.user_metadata?.role;
+    const userRole = req.user.role || req.user.app_metadata?.role || req.user.user_metadata?.role;
     const userId = req.user.id;
     if (userRole === 'officer' && doc.uploadedBy !== userId) {
       res.status(403).json({ error: 'Forbidden' });
@@ -186,7 +186,7 @@ export const updateRecord = async (req: AuthenticatedRequest, res: Response): Pr
     }
 
     // Officers can only edit their own records.
-    const userRole = req.user.user_metadata?.role;
+    const userRole = req.user.role || req.user.app_metadata?.role || req.user.user_metadata?.role;
     const userId = req.user.id;
     if (userRole === 'officer' && record.uploadedBy !== userId) {
       res.status(403).json({ error: 'Forbidden: You can only edit your own records.' });

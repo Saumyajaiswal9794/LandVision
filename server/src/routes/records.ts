@@ -15,6 +15,6 @@ router.get('/:id', requireAuth, getRecordById);
 // Sprint D: PATCH /api/records/:id — edit a single field of a row.
 // Reviewer-only by default; officers may PATCH their own uploads (the
 // controller enforces the uploadedBy === userId check).
-router.patch('/:id', requireAuth, requireRole(['reviewer']), updateRecord);
+router.patch('/:id', requireAuth, requireRole(['officer', 'reviewer']), updateRecord);
 
 export default router;
