@@ -9,15 +9,19 @@ import { supabase } from '@/lib/supabaseClient';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
+type UploadStage = 'idle' | 'uploading' | 'extracting';
+
 export default function UploadPage() {
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
   const [village, setVillage] = useState('');
   const [district, setDistrict] = useState('');
-  const [uploading, setUploading] = useState(false);
+  const [stage, setStage] = useState<UploadStage>('idle');
   const [success, setSuccess] = useState(false);
   const [recordId, setRecordId] = useState('');
   const [error, setError] = useState('');
+
+  const isBusy = stage !== 'idle';
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -40,13 +44,14 @@ export default function UploadPage() {
       return;
     }
 
-    setUploading(true);
+    setStage('uploading');
     setError('');
 
     try {
       // Get current session token
       if (!supabase) {
         setError('Not authenticated. Please login again.');
+        setStage('idle');
         router.push('/login');
         return;
       }
@@ -55,6 +60,7 @@ export default function UploadPage() {
 
       if (authError || !data.session) {
         setError('Not authenticated. Please login again.');
+        setStage('idle');
         router.push('/login');
         return;
       }
@@ -80,33 +86,51 @@ export default function UploadPage() {
         // Handle specific error codes
         if (response.status === 413) {
           setError('File too large. Maximum size is 10MB.');
+          setStage('idle');
           return;
         }
         if (response.status === 403) {
           setError('You do not have permission to upload documents. Only officers can upload.');
+          setStage('idle');
           return;
         }
         if (response.status === 401) {
           setError('Authentication failed. Please login again.');
+          setStage('idle');
           router.push('/login');
           return;
         }
 
         const errorData = await response.json().catch(() => ({}));
         setError(errorData.error || `Upload failed (${response.status})`);
+        setStage('idle');
         return;
       }
 
       const result = await response.json();
-      setRecordId(result.recordId);
-      setSuccess(true);
-      setFile(null);
-      setVillage('');
-      setDistrict('');
+      const newRecordId = result.recordId;
+      setRecordId(newRecordId);
+
+      // Staged state: transition to extracting
+      setStage('extracting');
+
+      // Trigger extraction
+      try {
+        await fetch(`${API_BASE_URL}/api/documents/${newRecordId}/extract`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+      } catch (extractErr) {
+        console.warn('Extraction trigger failed, proceeding to document detail:', extractErr);
+      }
+
+      // Redirect to document detail page (shows extracted or failed status)
+      router.push(`/documents/${newRecordId}`);
     } catch (err) {
       setError((err as Error).message || 'An error occurred during upload');
-    } finally {
-      setUploading(false);
+      setStage('idle');
     }
   };
 
@@ -140,7 +164,7 @@ export default function UploadPage() {
                 type="file"
                 accept="application/pdf,image/*"
                 onChange={handleFileChange}
-                disabled={uploading}
+                disabled={isBusy}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
               />
               <Upload className="w-10 h-10 text-slate-400 mb-4" />
@@ -161,7 +185,7 @@ export default function UploadPage() {
                 <button
                   type="button"
                   onClick={() => setFile(null)}
-                  disabled={uploading}
+                  disabled={isBusy}
                   className="text-xs text-red-500 hover:underline disabled:text-gray-400"
                 >
                   Remove
@@ -176,7 +200,7 @@ export default function UploadPage() {
                   type="text"
                   value={village}
                   onChange={(e) => setVillage(e.target.value)}
-                  disabled={uploading}
+                  disabled={isBusy}
                   placeholder="e.g., Rampur"
                   className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-brand-500 disabled:bg-gray-100"
                   required
@@ -188,7 +212,7 @@ export default function UploadPage() {
                   type="text"
                   value={district}
                   onChange={(e) => setDistrict(e.target.value)}
-                  disabled={uploading}
+                  disabled={isBusy}
                   placeholder="e.g., Agra"
                   className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-brand-500 disabled:bg-gray-100"
                   required
@@ -208,9 +232,13 @@ export default function UploadPage() {
             <Button
               type="submit"
               className="w-full"
-              disabled={!file || uploading || !village || !district}
+              disabled={!file || isBusy || !village || !district}
             >
-              {uploading ? 'Processing Extraction...' : 'Submit and Extract'}
+              {stage === 'uploading'
+                ? 'Uploading...'
+                : stage === 'extracting'
+                ? 'Extracting...'
+                : 'Submit and Extract'}
             </Button>
           </CardContent>
         </form>
