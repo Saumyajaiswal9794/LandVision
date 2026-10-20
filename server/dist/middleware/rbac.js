@@ -7,7 +7,7 @@ const requireRole = (allowedRoles) => {
             res.status(401).json({ error: 'Authentication required' });
             return;
         }
-        const userRole = req.user.user_metadata?.role;
+        const userRole = req.user.role || req.user.app_metadata?.role || req.user.user_metadata?.role;
         if (!userRole) {
             res.status(403).json({
                 error: 'Forbidden: User role not set. Please complete profile setup.'

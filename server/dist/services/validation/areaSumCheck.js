@@ -1,57 +1,152 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.verifyAreaSum = void 0;
+exports.checkAreaSumFlags = checkAreaSumFlags;
+exports.parsePlotArea = parsePlotArea;
 exports.checkAreaSum = checkAreaSum;
 const LandRecord_1 = require("../../models/LandRecord");
 const env_1 = require("../../config/env");
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 /**
- * Validates if the total plot area for a village exceeds the configured limit.
- * The limit is read from env.VILLAGE_AREA_LIMIT_HECTARES (default 500).
- * An explicit villageAreaLimit parameter can still be passed to override it.
+ * Sprint C — per-row area-sum check.
  *
- * @param village - Village name
- * @param villageAreaLimit - (Optional) Override limit; falls back to env.VILLAGE_AREA_LIMIT_HECTARES
- * @param excludeRecordId - Record ID to exclude from calculation (current record)
- * @returns Array of validation flags (empty if valid)
+ * Sums `plotArea` (in hectares) across ALL records for the given village
+ * (regardless of documentId — the meaning is unchanged from the original
+ * implementation), INCLUDING the current row's contribution passed in
+ * `currentPlotArea`. Returns a structured `AreaSumCheckResult` with flags
+ * when the sum exceeds the configured limit.
+ *
+ * - 'exceeds_village_total' (severity error)  — total > limit
+ * - 'near_village_total'     (severity warning) — total > 80% of limit
+ *
+ * The numeric prefix is extracted from strings like "2.5 hectare" /
+ * "1.85 हेक्टेयर" / "0.5 ha" — anything that starts with a number.
  */
-async function checkAreaSum(village, villageAreaLimit, excludeRecordId) {
+async function checkAreaSumFlags(input) {
+    const limit = input.villageAreaLimit !== undefined
+        ? input.villageAreaLimit
+        : env_1.env.VILLAGE_AREA_LIMIT_HECTARES;
     try {
         const flags = [];
-        // Use caller-supplied limit, or fall back to env variable (default 500)
-        const limit = villageAreaLimit !== undefined ? villageAreaLimit : env_1.env.VILLAGE_AREA_LIMIT_HECTARES;
-        // Find all extracted land records for this village
+        // -------------------------------------------------------------------
+        // Query all existing extracted rows for this village with a non-null
+        // plotArea. We sum across documents (the rule is village-level).
+        // -------------------------------------------------------------------
         const query = {
-            village: { $regex: village, $options: 'i' }, // Case-insensitive
-            extractedFields: { $exists: true },
-            'extractedFields.plotArea.value': { $exists: true, $ne: null },
+            village: { $regex: escapeRegex(input.village), $options: 'i' },
+            // Use $nin to express "not null and not empty string" — combining
+            // two `$ne` keys in the same literal triggers TS1117.
+            'extractedFields.plotArea.value': { $exists: true, $nin: [null, ''] },
         };
-        if (excludeRecordId) {
-            query._id = { $ne: excludeRecordId };
+        if (input.excludeRecordId) {
+            query._id = { $ne: input.excludeRecordId };
         }
-        const records = await LandRecord_1.LandRecord.find(query);
-        // Sum plot areas (extract numeric value from strings like "2.5 hectare")
+        const records = await LandRecord_1.LandRecord.find(query).lean();
         let totalArea = 0;
         for (const record of records) {
             const plotAreaStr = record.extractedFields?.plotArea?.value;
-            if (plotAreaStr) {
-                // Extract numeric value from strings like "2.5 hectare" or "1.5"
-                const numMatch = plotAreaStr.match(/^([\d.]+)/);
-                if (numMatch) {
-                    totalArea += parseFloat(numMatch[1]);
-                }
+            const n = parsePlotArea(plotAreaStr);
+            if (n !== null) {
+                totalArea += n;
             }
         }
-        // Check if total exceeds limit
-        if (totalArea > limit) {
-            flags.push('exceeds_village_total');
-            console.warn(`[Validation] Village "${village}" total area (${totalArea}) exceeds limit (${limit}) [env: VILLAGE_AREA_LIMIT_HECTARES]`);
+        // Add the current row's contribution (the row may not be saved yet).
+        if (input.currentPlotArea !== undefined && input.currentPlotArea !== null) {
+            const n = parsePlotArea(input.currentPlotArea);
+            if (n !== null) {
+                totalArea += n;
+            }
         }
-        return flags;
+        if (totalArea > limit) {
+            flags.push({
+                rule: 'exceeds_village_total',
+                severity: 'error',
+                message: `Village "${input.village}" total area (${totalArea.toFixed(2)} ha) ` +
+                    `exceeds the configured limit (${limit} ha).`,
+                field: 'plotArea',
+            });
+            console.warn(`[Validation] Village "${input.village}" total area (${totalArea}) ` +
+                `exceeds limit (${limit}) [env: VILLAGE_AREA_LIMIT_HECTARES]`);
+        }
+        else if (totalArea > limit * 0.8) {
+            // Soft warning at 80% capacity — surfaces in the UI but does NOT
+            // force needs_review on its own.
+            flags.push({
+                rule: 'near_village_total',
+                severity: 'warning',
+                message: `Village "${input.village}" total area (${totalArea.toFixed(2)} ha) ` +
+                    `is above 80% of the configured limit (${limit} ha).`,
+                field: 'plotArea',
+            });
+        }
+        return { flags, totalArea, limit };
     }
     catch (error) {
         console.error('[Validation] Area sum check error:', error);
-        return ['area_check_error'];
+        return {
+            flags: [
+                {
+                    rule: 'area_check_error',
+                    severity: 'warning',
+                    message: `Area sum check failed: ${error.message}`,
+                },
+            ],
+            totalArea: 0,
+            limit,
+        };
     }
+}
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+/**
+ * Extracts the leading numeric value from a plot-area string.
+ *
+ * Accepts:
+ *   "2.5 hectare"  → 2.5
+ *   "1.85 hectares" → 1.85
+ *   "0.5 ha"       → 0.5
+ *   "1.85 हेक्टेयर"  → 1.85
+ *   "3"            → 3
+ *   "3.0"          → 3.0
+ *
+ * Returns null when no leading number is found.
+ */
+function parsePlotArea(value) {
+    if (value === null || value === undefined)
+        return null;
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : null;
+    }
+    const s = String(value).trim();
+    if (!s)
+        return null;
+    const m = s.match(/^([\d.]+)/);
+    if (!m)
+        return null;
+    const n = parseFloat(m[1]);
+    return Number.isFinite(n) ? n : null;
+}
+function escapeRegex(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+// ---------------------------------------------------------------------------
+// Legacy shims
+// ---------------------------------------------------------------------------
+/**
+ * @deprecated Use `checkAreaSumFlags()` which returns structured flags
+ * + the total. This thin shim is kept for backward compatibility with
+ * old callers that expect a flat `string[]`.
+ */
+async function checkAreaSum(village, villageAreaLimit, excludeRecordId) {
+    const result = await checkAreaSumFlags({
+        village,
+        villageAreaLimit,
+        excludeRecordId,
+    });
+    return result.flags.map((f) => f.rule);
 }
 /**
  * Legacy function for backward compatibility (placeholder)
@@ -62,6 +157,8 @@ const verifyAreaSum = async (record) => {
 };
 exports.verifyAreaSum = verifyAreaSum;
 exports.default = {
+    checkAreaSumFlags,
     checkAreaSum,
     verifyAreaSum: exports.verifyAreaSum,
+    parsePlotArea,
 };

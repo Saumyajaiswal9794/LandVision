@@ -5,6 +5,7 @@ import { requireAuth } from '../middleware/auth';
 const router = Router();
 
 router.get('/profile', requireAuth, getProfile);
+router.get('/me', requireAuth, getProfile);
 router.post('/sync', requireAuth, syncUser);
 
 export default router;

@@ -10,6 +10,7 @@ import { routeRowByConfidence } from '../services/validation/confidenceRouting';
 import { env } from '../config/env';
 import { ValidationFlag } from '@landvision/types';
 
+import { extractionQueue } from '../queues/extractionQueue';
 /**
  * Returns true if a Supabase signed URL has expired.
  */
@@ -517,6 +518,14 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
       return;
     }
 
+    // Officers can only extract their own documents
+    const userRole = req.user.role || req.user.app_metadata?.role || req.user.user_metadata?.role;
+    const userId = req.user.id;
+    if (userRole === 'officer' && record.uploadedBy !== userId) {
+      res.status(403).json({ error: 'Forbidden: You can only extract your own documents' });
+      return;
+    }
+
     // Check if already extracted
     if (record.status === 'extracted' || record.status === 'needs_review' || record.status === 'auto_approved') {
       res.status(400).json({ error: 'Document already extracted' });
@@ -526,14 +535,11 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
     // Update status to "extracting"
     record.status = 'extracting';
     await record.save();
+    await extractionQueue.addJob({ id: record._id.toString() });
+    res.status(202).json({ recordId: record._id, status: 'extracting' });
+    return;
 
-    // -----------------------------------------------------------------------
-    // STEP 1: Resolve the download URL — regenerate if expired
-    // -----------------------------------------------------------------------
-    let downloadUrl = record.storageUrl;
-    let urlWasRefreshed = false;
-
-    if (isSignedUrlExpired(downloadUrl)) {
+    /*
       console.log('[Extraction] Signed URL appears expired — regenerating...');
       if (!record.storagePath) {
         // Can't regenerate without the path; fail early with a clear message
@@ -780,7 +786,7 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
       rowsExtracted: persistedRecords.length,
       childRecords: persistedRecords,
       confidenceThreshold: env.CONFIDENCE_THRESHOLD,
-    });
+    }); */
   } catch (error) {
     console.error('[Extraction] Unexpected error:', error);
     res.status(500).json({ error: (error as Error).message });

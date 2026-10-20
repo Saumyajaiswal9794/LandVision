@@ -32,11 +32,16 @@ const requireAuth = async (req, res, next) => {
             res.status(401).json({ error: 'Token verification failed: no user data' });
             return;
         }
+        // reviewer/admin roles are assigned manually via the Supabase dashboard (app_metadata) until an admin UI exists.
+        // Read role strictly from app_metadata (admin-assigned only); user_metadata is user-writable and untrusted.
+        const role = data.user.app_metadata?.role || 'officer';
         // Attach user info to request
         req.user = {
             id: data.user.id,
             email: data.user.email || '',
-            user_metadata: data.user.user_metadata,
+            role,
+            app_metadata: { role },
+            user_metadata: { role },
         };
         next();
     }

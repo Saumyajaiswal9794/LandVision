@@ -69,18 +69,18 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 // --- Database connection & Server Boot ---------------------------------------
 const bootstrap = async () => {
   try {
-    // Only connect in non-test modes
+    // Only connect and listen in non-test modes
     if (process.env.NODE_ENV !== 'test') {
       await connectMongoDB();
       await connectPostgres();
-    }
 
-    // Render assigns PORT dynamically — always read env.PORT, never a hardcoded value.
-    const port = env.PORT;
-    app.listen(port, () => {
-      console.log(`[Server] LandVision backend API running on port ${port}`);
-      console.log(`[Server] CORS allowed origins: ${getAllowedOrigins().join(', ')}`);
-    });
+      // Render assigns PORT dynamically — always read env.PORT, never a hardcoded value.
+      const port = env.PORT;
+      app.listen(port, () => {
+        console.log(`[Server] LandVision backend API running on port ${port}`);
+        console.log(`[Server] CORS allowed origins: ${getAllowedOrigins().join(', ')}`);
+      });
+    }
   } catch (error) {
     console.error('Bootstrap failure:', error);
     process.exit(1);

@@ -8,27 +8,47 @@
    Creating an optimized production build ...
  ✓ Compiled successfully
    Linting and checking validity of types ...
+
+./app/documents/[id]/page.tsx
+246:9  Warning: The 'activeLowConfidenceFields' logical expression could make the dependencies of useMemo Hook (at line 269) change on every render. To fix this, wrap the initialization of 'activeLowConfidenceFields' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+248:9  Warning: The 'activeExtractedFields' logical expression could make the dependencies of useMemo Hook (at line 269) change on every render. To fix this, wrap the initialization of 'activeExtractedFields' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+390:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+
+./app/map/MapView.tsx
+64:27  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+
+./app/map/page.tsx
+52:21  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+56:24  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+
+./lib/api.ts
+199:70  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+
+info  - Need to disable some ESLint rules? Learn more here: https://nextjs.org/docs/basic-features/eslint#disabling-rules
    Collecting page data ...
-   Generating static pages (0/8) ...
-   Generating static pages (2/8) 
-   Generating static pages (4/8) 
-   Generating static pages (6/8) 
- ✓ Generating static pages (8/8)
+   Generating static pages (0/9) ...
+   Generating static pages (2/9) 
+   Generating static pages (4/9) 
+   Generating static pages (6/9) 
+ ✓ Generating static pages (9/9)
    Finalizing page optimization ...
    Collecting build traces ...
 
 Route (app)                              Size     First Load JS
-┌ ○ /                                    175 B          96.1 kB
-├ ○ /_not-found                          873 B          88.1 kB
-├ ○ /login                               1.43 kB        95.4 kB
-├ ○ /map                                 3.06 kB          97 kB
-├ ○ /review                              3.17 kB        97.1 kB
-└ ○ /upload                              2.36 kB        96.3 kB
-+ First Load JS shared by all            87.2 kB
-  ├ chunks/364-4b3566a54dd27ea6.js       31.7 kB
-  ├ chunks/618f8807-c681a73ea4e65898.js  53.6 kB
-  └ other shared chunks (total)          1.86 kB
+┌ ○ /                                    807 B           152 kB
+├ ○ /_not-found                          873 B          88.7 kB
+├ ○ /dashboard                           5.92 kB         173 kB
+├ ƒ /documents/[id]                      9.7 kB          177 kB
+├ ○ /login                               2.23 kB         169 kB
+├ ○ /map                                 2.37 kB         154 kB
+├ ○ /signup                              2.16 kB         169 kB
+└ ○ /upload                              3.52 kB         162 kB
++ First Load JS shared by all            87.8 kB
+  ├ chunks/364-92b8b212b60036c4.js       31.7 kB
+  ├ chunks/618f8807-ab13f1e6b125f9b4.js  53.6 kB
+  └ other shared chunks (total)          2.45 kB
 
 
-○  (Static)  prerendered as static content
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
 

@@ -49,6 +49,17 @@ const LegacyExtractedFieldSchema = new mongoose_1.Schema({
         height: Number,
     },
 }, { _id: false });
+// Sprint C: structured validation flag — { rule, severity, message, field? }.
+const ValidationResultSchema = new mongoose_1.Schema({
+    rule: { type: String, required: true },
+    severity: {
+        type: String,
+        enum: ['error', 'warning', 'info'],
+        default: 'warning',
+    },
+    message: { type: String, required: true },
+    field: { type: String, default: null },
+}, { _id: false });
 // ---------------------------------------------------------------------------
 // Main schema
 // ---------------------------------------------------------------------------
@@ -113,6 +124,10 @@ const LandRecordSchema = new mongoose_1.Schema({
     },
     // Sprint 2: Validation & Routing
     validationFlags: [{ type: String }],
+    // Sprint C: structured validation flags { rule, severity, message, field? }.
+    validationResults: [ValidationResultSchema],
+    // Sprint C: list of required-field names below the confidence threshold.
+    lowConfidenceFields: [{ type: String }],
     reviewedBy: { type: String, default: null },
     reviewedAt: { type: Date, default: null },
     gisPlotId: { type: String, default: null },

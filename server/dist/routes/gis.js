@@ -9,5 +9,4 @@ router.get('/village/:villageName', auth_1.requireAuth, gisController_1.getVilla
 router.get('/plot/:khasraNumber', auth_1.requireAuth, gisController_1.getPlotByKhasraRoute);
 // Legacy placeholder routes (kept for backward compatibility)
 router.get('/boundary', auth_1.requireAuth, gisController_1.getPlotBoundary);
-router.put('/boundary', auth_1.requireAuth, gisController_1.getPlotBoundary);
 exports.default = router;

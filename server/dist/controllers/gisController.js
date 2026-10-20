@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updatePlotBoundary = exports.getPlotBoundary = exports.getPlotByKhasraRoute = exports.getVillagePlots = void 0;
+exports.getPlotBoundary = exports.getPlotByKhasraRoute = exports.getVillagePlots = void 0;
 const plotQueries_1 = require("../services/gis/plotQueries");
 // Sprint 4: Get all plots for a village as GeoJSON FeatureCollection
 const getVillagePlots = async (req, res) => {
@@ -77,14 +77,3 @@ const getPlotBoundary = async (req, res) => {
     }
 };
 exports.getPlotBoundary = getPlotBoundary;
-const updatePlotBoundary = async (req, res) => {
-    try {
-        res.status(200).json({
-            message: 'Plot boundaries updated successfully',
-        });
-    }
-    catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-};
-exports.updatePlotBoundary = updatePlotBoundary;
