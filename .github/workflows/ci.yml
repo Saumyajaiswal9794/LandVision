@@ -6,25 +6,41 @@ on:
   pull_request:
     branches: [ main, master ]
 
-jobs:
-  build-and-lint:
-    runs-on: ubuntu-latest
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
 
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-
       - name: Install dependencies
         run: npm ci
-
+      - name: Run npm audit (high and above)\n        run: npm audit --audit-level=high || true
+        continue-on-error: true
+  build-and-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
       - name: Run lint
         run: npm run lint
-
       - name: Run build
         run: npm run build
