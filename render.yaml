@@ -18,9 +18,10 @@ services:
     plan: free            # bump to `starter` for production traffic
     region: oregon        # change to match your frontend region for lower latency
     branch: main
-    rootDir: server       # this repo is a monorepo — deploy from /server
-    buildCommand: npm install && npm run build
-    startCommand: npm start
+    # Deploy from the repo root: server/ depends on the @landvision/types
+    # workspace package, so `npm install` inside server/ alone cannot resolve it.
+    buildCommand: npm install --workspace packages/types --workspace server && npm run build -w @landvision/types && npm run build -w @landvision/server
+    startCommand: npm start -w @landvision/server
     healthCheckPath: /health
     autoDeploy: true
     envVars:
