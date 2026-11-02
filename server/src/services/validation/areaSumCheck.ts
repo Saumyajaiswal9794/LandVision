@@ -62,24 +62,17 @@ export async function checkAreaSumFlags(
     const flags: ValidationFlag[] = [];
 
     // -------------------------------------------------------------------
-    // Query all existing extracted rows for this village with a non-null
-    // plotArea. We sum across documents (the rule is village-level).
+    // Query all existing extracted rows for this village with a non-empty
+    // plotArea (single SQL query over JSONB — sum across documents; the
+    // rule is village-level).
     // -------------------------------------------------------------------
-    const query: Record<string, unknown> = {
-      village: { $regex: escapeRegex(input.village), $options: 'i' },
-      // Use $nin to express "not null and not empty string" — combining
-      // two `$ne` keys in the same literal triggers TS1117.
-      'extractedFields.plotArea.value': { $exists: true, $nin: [null, ''] },
-    };
-    if (input.excludeRecordId) {
-      query._id = { $ne: input.excludeRecordId };
-    }
-
-    const records = await LandRecord.find(query).lean();
+    const plotAreaValues = await LandRecord.getPlotAreaValuesForVillage(
+      input.village,
+      input.excludeRecordId ?? null,
+    );
 
     let totalArea = 0;
-    for (const record of records as any[]) {
-      const plotAreaStr = record.extractedFields?.plotArea?.value;
+    for (const plotAreaStr of plotAreaValues) {
       const n = parsePlotArea(plotAreaStr);
       if (n !== null) {
         totalArea += n;
@@ -167,9 +160,6 @@ export function parsePlotArea(value: string | number | null | undefined): number
   return Number.isFinite(n) ? n : null;
 }
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 // ---------------------------------------------------------------------------
 // Legacy shims

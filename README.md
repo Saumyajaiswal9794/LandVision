@@ -63,10 +63,10 @@ independently deployable and the only cross-tier contract is JSON over HTTP.
                   │  • Gemini 2.5    │  │  • Supabase Auth │  │                  │
                   │    Flash (multi- │  │  • Supabase      │  └──────────────────┘
                   │    modal LLM)    │  │    Storage (img) │
-                  │  • Confidence    │  │  • MongoDB Atlas  │
-                  │    scoring       │  │    (LandRecords) │
-                  │                  │  │  • Postgres +     │
-                  │                  │  │    PostGIS (plots)│
+                  │  • Confidence    │  │  • Supabase        │
+                  │    scoring       │  │    Postgres + GIS  │
+                  │                  │  │    (the only       │
+                  │                  │  │    datastore)      │
                   └─────────────────┘  └──────────────────┘
 ```
 
@@ -75,7 +75,7 @@ independently deployable and the only cross-tier contract is JSON over HTTP.
 1. **Upload (officer).** The officer picks a scanned PDF/image, fills
    `village` and `district`, and submits. The browser uploads the file to
    the backend (`POST /api/documents/upload`), which streams it to Supabase
-   Storage and creates a `LandRecord` in MongoDB with `status: uploaded`.
+   Storage and creates a `LandRecord` row in Supabase Postgres with `status: uploaded`.
 
 2. **Extraction (backend → Gemini).** An officer (or a background worker)
    calls `POST /api/documents/:id/extract`. The backend:
@@ -133,7 +133,7 @@ independently deployable and the only cross-tier contract is JSON over HTTP.
 | --------------------- | ----------------------------------------------------- |
 | **Express 4**         | HTTP API                                               |
 | **TypeScript**        | Same shared types as frontend (`@landvision/types`)    |
-| **Mongoose 8**        | `LandRecord` documents in MongoDB Atlas               |
+| **pg 8**             | SQL data layer over Supabase Postgres (all records)   |
 | **pg 8**              | Postgres/PostGIS pool for plot polygons                |
 | **Multer**            | In-memory file upload handling                         |
 | **Supabase JS SDK**   | Server-side storage writes (service-role key)          |
@@ -146,7 +146,8 @@ independently deployable and the only cross-tier contract is JSON over HTTP.
 | --------------------- | --------------------------------------------------- |
 | **Supabase Auth**     | JWT-based auth for officer + reviewer accounts       |
 | **Supabase Storage**  | Private bucket for scanned document images           |
-| **MongoDB Atlas**     | `LandRecord` documents (extracted fields, status)   |
+| **Supabase Postgres** | Land records, users, audit, usage, notifications,     |
+|                       | review queue (JSONB for nested extraction payloads)   |
 | **Postgres + PostGIS**| Plot polygon geometries (one row per khasra+village) |
 
 ### Why Gemini over a separate OCR+LLM pipeline
@@ -218,7 +219,7 @@ LandVision/
 │   ├── src/
 │   │   ├── config/
 │   │   │   ├── env.ts          # Sprint 5: fatal-on-missing-prod-env check
-│   │   │   ├── db.ts           # Mongoose + pg pool
+│   │   │   ├── db.ts           # pg pool (Supabase Postgres — the only DB)
 │   │   │   └── supabaseAdmin.ts
 │   │   ├── controllers/        # auth, documents, gis, records, validation
 │   │   ├── middleware/
@@ -259,7 +260,7 @@ LandVision/
 
 - Node.js 18+ and npm
 - A Supabase project (free tier is fine) — create a bucket named `land-records`
-- A MongoDB Atlas cluster (free M0) OR a local MongoDB via `docker compose up`
+- PostgreSQL: Supabase Postgres (default) or the bundled local PostGIS via `docker compose up`
 - A Postgres+PostGIS instance (Supabase Postgres works; or use the included
   `docker-compose.yml`)
 - A Gemini API key from https://aistudio.google.com/app/apikey
@@ -335,7 +336,7 @@ cd server
 #    duplicate_detected + exceeds_village_total flags, 3 villages).
 npm run seed:demo
 
-# 2. Seed PostGIS polygons for every khasra+village pair found in MongoDB.
+# 2. Seed PostGIS polygons for every khasra+village pair found in the database.
 npm run seed:plots
 ```
 
@@ -463,11 +464,11 @@ are intentionally not production-grade:
 | Gemini 2.5 Flash   | 15 req/min, 1500/day             | ~$0.001/record at paid tier — for 1 M records/year ≈ **$1,000** |
 | Supabase           | 500 MB DB, 1 GB Storage, 50K MAU | Pro tier $25/mo covers 8 GB DB / 100 GB Storage / 100K MAU |
 | Render             | Sleeps after 15 min idle          | Starter $7/mo per service = always-on     |
-| MongoDB Atlas       | 512 MB M0                        | M10 ~$60/mo for 10 GB with backups         |
+
 | Vercel             | 100 GB egress/mo on Hobby        | Pro $20/mo for 1 TB egress + team features |
 
 At a target throughput of 100 documents/day the all-in cost lands around
-**$120–$150/month**, dominated by Supabase Pro and MongoDB M10. The biggest
+**$120–$150/month**, dominated by Supabase Pro. The biggest
 variable is Gemini: a single burst of digitising a backlog (say 50 K
 historical scans) would cost ~$50 in Gemini calls alone — well within
 budget, but worth monitoring with per-record cost dashboards from day one.

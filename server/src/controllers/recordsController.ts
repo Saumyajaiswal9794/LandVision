@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { Request } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { LandRecord } from '../models/LandRecord';
 
@@ -31,15 +32,15 @@ function applyHumanCorrection(record: any, fieldName: string, newValue: string):
   }
 }
 
-export const listRecords = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+export const listRecords = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.user) {
+    const user = (req as AuthenticatedRequest).user;
+    if (!user) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-
-    const userRole = req.user.role || req.user.app_metadata?.role || req.user.user_metadata?.role;
-    const userId = req.user.id;
+    const userRole = user.role || user.app_metadata?.role || user.user_metadata?.role;
+    const userId = user.id;
     const { documentId, status } = req.query;
 
     const query: Record<string, unknown> = {};
@@ -94,15 +95,15 @@ export const listRecords = async (req: AuthenticatedRequest, res: Response): Pro
 // Sprint D: GET /api/records/:id — single row detail.
 // ---------------------------------------------------------------------------
 
-export const getRecordById = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+export const getRecordById = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.user) {
+    const user = (req as AuthenticatedRequest).user;
+    if (!user) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-
     const { id } = req.params;
-    const doc: any = await LandRecord.findById(id).lean();
+    const doc: any = await LandRecord.findById(id);
 
     if (!doc) {
       res.status(404).json({ error: 'Record not found' });
@@ -110,8 +111,8 @@ export const getRecordById = async (req: AuthenticatedRequest, res: Response): P
     }
 
     // Officers can only see their own records.
-    const userRole = req.user.role || req.user.app_metadata?.role || req.user.user_metadata?.role;
-    const userId = req.user.id;
+    const userRole = user.role || user.app_metadata?.role || user.user_metadata?.role;
+    const userId = user.id;
     if (userRole === 'officer' && doc.uploadedBy !== userId) {
       res.status(403).json({ error: 'Forbidden' });
       return;
@@ -156,13 +157,13 @@ export const getRecordById = async (req: AuthenticatedRequest, res: Response): P
 // at the route layer if needed.
 // ---------------------------------------------------------------------------
 
-export const updateRecord = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+export const updateRecord = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.user) {
+    const user = (req as AuthenticatedRequest).user;
+    if (!user) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-
     const { id } = req.params;
     const { fieldName, value } = req.body || ({} as any);
 
@@ -186,8 +187,8 @@ export const updateRecord = async (req: AuthenticatedRequest, res: Response): Pr
     }
 
     // Officers can only edit their own records.
-    const userRole = req.user.role || req.user.app_metadata?.role || req.user.user_metadata?.role;
-    const userId = req.user.id;
+    const userRole = user.role || user.app_metadata?.role || user.user_metadata?.role;
+    const userId = user.id;
     if (userRole === 'officer' && record.uploadedBy !== userId) {
       res.status(403).json({ error: 'Forbidden: You can only edit your own records.' });
       return;

@@ -20,7 +20,6 @@ You will need accounts and credentials for:
 - **GitHub** — the repo is your deploy source.
 - **Render** — https://render.com (free tier works for demo).
 - **Vercel** — https://vercel.com (free Hobby tier works).
-- **MongoDB Atlas** — free M0 cluster for `MONGODB_URI`.
 - **Supabase** — one project provides Auth, Storage (scanned docs), and Postgres/PostGIS (`PG_CONNECTION_STRING`).
 - **Google AI Studio** — free Gemini API key for `GEMINI_API_KEY` (https://aistudio.google.com/app/apikey).
 
@@ -46,7 +45,6 @@ You must also have already created the Supabase **storage bucket** named
    | Key                     | Where it comes from                                          |
    | ----------------------- | ------------------------------------------------------------ |
    | `CLIENT_ORIGIN`         | The Vercel URL you'll get in step 2 (e.g. `https://landvision.vercel.app`). Set it AFTER step 2 if you don't have it yet. |
-   | `MONGODB_URI`           | MongoDB Atlas → Connect → Drivers connection string.        |
    | `SUPABASE_URL`          | Supabase dashboard → Project Settings → API → Project URL.   |
    | `SUPABASE_ANON_KEY`     | Supabase → Project Settings → API → `anon` `public` key.     |
    | `SUPABASE_SERVICE_KEY`  | Supabase → Project Settings → API → `service_role` key (server-only — never expose). |
@@ -59,7 +57,7 @@ You must also have already created the Supabase **storage bucket** named
    ```
    [Server] LandVision backend API running on port 10000
    [Server] CORS allowed origins: https://landvision.vercel.app
-   Successfully connected to MongoDB
+   Successfully connected to PostgreSQL/PostGIS
    Successfully connected to PostgreSQL/PostGIS
    ```
 
@@ -143,12 +141,12 @@ and region. You don't need to customise it for a standard Next.js deploy.
 
 After both services are live:
 
-1. **Seed demo LandRecords into MongoDB** (run locally, with `MONGODB_URI`
-   pointing at the production Atlas instance in your local `.env`):
+1. **Seed demo LandRecords into Postgres** (run locally, with
+   `PG_CONNECTION_STRING` pointing at the production Supabase database):
 
    ```bash
    cd server
-   MONGODB_URI=mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/landvision?retryWrites=true&w=majority \
+   PG_CONNECTION_STRING=postgresql://postgres:PASSWORD@db.YOUR-PROJECT.supabase.co:5432/postgres \
    npx ts-node src/db/seedDemo.ts
    ```
 

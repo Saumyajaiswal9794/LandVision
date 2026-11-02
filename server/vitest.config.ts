@@ -4,8 +4,10 @@ export default defineConfig({
   test: {
     // Co-locate tests next to source under __tests__/
     include: ['src/**/__tests__/**/*.test.ts'],
-    // Run tests in the Node environment (we touch Buffer / Tesseract / mongoose).
+    // Run tests in the Node environment (we touch Buffer / Tesseract / pg).
     environment: 'node',
+    // Disable the dev auth bypass + force test mode before modules load.
+    setupFiles: ['vitest.setup.ts'],
     // Don't bail the whole suite on a single failure — surface every error
     // at once so the developer can fix them in one pass.
     bail: 0,

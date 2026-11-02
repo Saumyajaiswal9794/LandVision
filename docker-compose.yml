@@ -1,16 +1,9 @@
 version: '3.8'
 
 services:
-  mongodb:
-    image: mongo:6.0
-    container_name: landvision-mongo
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo-data:/data/db
-    environment:
-      - MONGO_INITDB_DATABASE=landvision
-
+  # Local development stand-in for Supabase Postgres (PostGIS included).
+  # In production the app talks to Supabase Postgres directly via
+  # PG_CONNECTION_STRING — no docker needed.
   postgis:
     image: postgis/postgis:15-3.3
     container_name: landvision-postgis
@@ -24,5 +17,4 @@ services:
       - POSTGRES_DB=landvision_gis
 
 volumes:
-  mongo-data:
   postgres-data:

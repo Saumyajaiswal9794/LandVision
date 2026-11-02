@@ -6,6 +6,7 @@ import {
   ConvertedRow,
 } from './geminiExtract';
 import { extractWithTesseract } from './tesseractFallback';
+import { GeminiUsageContext } from './geminiExtract';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -48,6 +49,7 @@ export async function extractLandRecord(
   imageBuffer: Buffer,
   mimeType: string,
   pageNo: number = 1,
+  usage?: GeminiUsageContext,
 ): Promise<ExtractedLandRecord> {
   // -----------------------------------------------------------------------
   // Try Gemini first — multi-row structured output.
@@ -58,6 +60,7 @@ export async function extractLandRecord(
       imageBuffer,
       mimeType,
       pageNo,
+      usage,
     );
 
     const rows: ExtractedLandRecordRow[] = geminiResult.rows.map((row, idx) => ({

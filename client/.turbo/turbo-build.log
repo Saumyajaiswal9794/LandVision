@@ -26,20 +26,25 @@
 
 info  - Need to disable some ESLint rules? Learn more here: https://nextjs.org/docs/basic-features/eslint#disabling-rules
    Collecting page data ...
-   Generating static pages (0/9) ...
-   Generating static pages (2/9) 
-   Generating static pages (4/9) 
-   Generating static pages (6/9) 
- ✓ Generating static pages (9/9)
+   Generating static pages (0/14) ...
+   Generating static pages (3/14) 
+   Generating static pages (6/14) 
+   Generating static pages (10/14) 
+ ✓ Generating static pages (14/14)
    Finalizing page optimization ...
    Collecting build traces ...
 
 Route (app)                              Size     First Load JS
-┌ ○ /                                    807 B           152 kB
+┌ ○ /                                    485 B          88.3 kB
 ├ ○ /_not-found                          873 B          88.7 kB
-├ ○ /dashboard                           5.92 kB         173 kB
+├ ○ /admin                               2.1 kB          172 kB
+├ ○ /admin/audit                         4.41 kB         174 kB
+├ ○ /admin/usage                         4.6 kB          175 kB
+├ ○ /admin/users                         4.52 kB         175 kB
+├ ○ /auth/callback                       1.08 kB         153 kB
+├ ○ /dashboard                           5.62 kB         176 kB
 ├ ƒ /documents/[id]                      9.7 kB          177 kB
-├ ○ /login                               2.23 kB         169 kB
+├ ○ /login                               3.08 kB         170 kB
 ├ ○ /map                                 2.37 kB         154 kB
 ├ ○ /signup                              2.16 kB         169 kB
 └ ○ /upload                              3.52 kB         162 kB

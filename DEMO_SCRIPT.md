@@ -51,7 +51,7 @@ records.
 
 > **Narration.** "I'm uploading a scanned Khasra page for the village
 > Rampur. The backend streams it to Supabase Storage and creates a
-> LandRecord in MongoDB. The status shows 'uploaded' — extraction is
+> LandRecord in Postgres. The status shows 'uploaded' — extraction is
 > triggered separately so the upload doesn't block the user."
 
 ---

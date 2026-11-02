@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import axios from 'axios';
+import { Request } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { uploadDocument as uploadToStorage, deleteDocument, regenerateSignedUrl } from '../services/storage/supabaseStorage';
 import { LandRecord } from '../models/LandRecord';
@@ -11,6 +12,7 @@ import { env } from '../config/env';
 import { ValidationFlag } from '@landvision/types';
 
 import { extractionQueue } from '../queues/extractionQueue';
+import { notifyUser } from '../services/notificationService';
 /**
  * Returns true if a Supabase signed URL has expired.
  */
@@ -36,15 +38,15 @@ function isSignedUrlExpired(storageUrl: string): boolean {
 // ---------------------------------------------------------------------------
 // Sprint 3: GET /documents — list documents for the authenticated user
 // ---------------------------------------------------------------------------
-export const listDocuments = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+export const listDocuments = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.user) {
+    const user = (req as AuthenticatedRequest).user;
+    if (!user) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-
-    const userRole = req.user.user_metadata?.role;
-    const userId = req.user.id;
+    const userRole = user.user_metadata?.role;
+    const userId = user.id;
     const { status: statusFilter } = req.query;
 
     // Build the query
@@ -89,16 +91,16 @@ export const listDocuments = async (req: AuthenticatedRequest, res: Response): P
 //           (rows where documentId == this document's _id). The document
 //           itself is the upload record; child rows are the extracted plots.
 // ---------------------------------------------------------------------------
-export const getDocumentDetail = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+export const getDocumentDetail = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.user) {
+    const user = (req as AuthenticatedRequest).user;
+    if (!user) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-
     const { id } = req.params;
-    const userRole = req.user.user_metadata?.role;
-    const userId = req.user.id;
+    const userRole = user.user_metadata?.role;
+    const userId = user.id;
 
     const record = await LandRecord.findById(id);
 
@@ -240,13 +242,13 @@ function applyHumanCorrection(record: any, fieldName: string, newValue: string):
   }
 }
 
-export const reviewDocument = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+export const reviewDocument = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.user) {
+    const user = (req as AuthenticatedRequest).user;
+    if (!user) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-
     const { id } = req.params;
     const { action, correctedFields, reason, rowId } = req.body;
 
@@ -276,7 +278,7 @@ export const reviewDocument = async (req: AuthenticatedRequest, res: Response): 
         const hasLowConfidence = (child.lowConfidenceFields || []).length > 0;
         if (!hasErrorFlag && !hasLowConfidence) {
           child.status = 'reviewed_approved';
-          child.reviewedBy = req.user.id;
+          child.reviewedBy = user.id;
           child.reviewedAt = new Date();
           await child.save();
           approvedCount++;
@@ -321,9 +323,19 @@ export const reviewDocument = async (req: AuthenticatedRequest, res: Response): 
 
     if (action === 'approve') {
       record.status = 'reviewed_approved';
-      record.reviewedBy = req.user.id;
+      record.reviewedBy = user.id;
       record.reviewedAt = new Date();
       await record.save();
+
+      void notifyUser({
+        userId: record.uploadedBy || '',
+        type: 'review_completed',
+        title: 'Record approved',
+        message: rowId
+          ? `A row of "${record.filename || 'your document'}" was approved by a reviewer.`
+          : `"${record.filename || 'Your document'}" was approved by a reviewer.`,
+        metadata: { documentId: id, rowId: rowId || null, action: 'approved' },
+      });
 
       res.status(200).json({
         recordId: record._id,
@@ -336,12 +348,22 @@ export const reviewDocument = async (req: AuthenticatedRequest, res: Response): 
 
     if (action === 'reject') {
       record.status = 'reviewed_rejected';
-      record.reviewedBy = req.user.id;
+      record.reviewedBy = user.id;
       record.reviewedAt = new Date();
       if (reason) {
         record.extractionError = reason;
       }
       await record.save();
+
+      void notifyUser({
+        userId: record.uploadedBy || '',
+        type: 'review_completed',
+        title: 'Record rejected',
+        message: rowId
+          ? `A row of "${record.filename || 'your document'}" was rejected by a reviewer.${reason ? ` Reason: ${reason}` : ''}`
+          : `"${record.filename || 'Your document'}" was rejected by a reviewer.${reason ? ` Reason: ${reason}` : ''}`,
+        metadata: { documentId: id, rowId: rowId || null, action: 'rejected', reason: reason || null },
+      });
 
       res.status(200).json({
         recordId: record._id,
@@ -365,7 +387,7 @@ export const reviewDocument = async (req: AuthenticatedRequest, res: Response): 
       }
 
       record.status = 'reviewed_approved';
-      record.reviewedBy = req.user.id;
+      record.reviewedBy = user.id;
       record.reviewedAt = new Date();
       await record.save();
 
@@ -391,11 +413,12 @@ export const reviewDocument = async (req: AuthenticatedRequest, res: Response): 
 // Sprint 1 & 2: Original controller functions (unchanged)
 // ---------------------------------------------------------------------------
 
-export const uploadDocument = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+export const uploadDocument = async (req: Request, res: Response): Promise<void> => {
   let savedStoragePath: string | null = null;
 
   try {
-    if (!req.user) {
+    const user = (req as AuthenticatedRequest).user;
+    if (!user) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
@@ -425,12 +448,12 @@ export const uploadDocument = async (req: AuthenticatedRequest, res: Response): 
     const { signedUrl, storagePath } = await uploadToStorage(file.buffer, file.originalname);
     savedStoragePath = storagePath;
 
-    // Create LandRecord in MongoDB — persist storagePath alongside storageUrl
+    // Create the LandRecord — persist storagePath alongside storageUrl
     const landRecord = new LandRecord({
       filename: file.originalname,
       village: village.trim(),
       district: district.trim(),
-      uploadedBy: req.user.id,
+      uploadedBy: user.id,
       storagePath,    // raw path — needed if we must regenerate the signed URL later
       storageUrl: signedUrl,
       status: 'uploaded',
@@ -447,7 +470,7 @@ export const uploadDocument = async (req: AuthenticatedRequest, res: Response): 
       status: savedRecord.status,
     });
   } catch (error) {
-    // If storage upload succeeded but MongoDB failed, delete the orphaned file
+    // If the DB insert failed after the storage upload, delete the orphaned file
     if (savedStoragePath) {
       console.warn(`MongoDB save failed after storage upload. Cleaning up orphaned file: ${savedStoragePath}`);
       await deleteDocument(savedStoragePath);
@@ -458,7 +481,7 @@ export const uploadDocument = async (req: AuthenticatedRequest, res: Response): 
   }
 };
 
-export const getDocumentStatus = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+export const getDocumentStatus = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
 
@@ -487,27 +510,29 @@ export const getDocumentStatus = async (req: AuthenticatedRequest, res: Response
 };
 
 /**
- * Triggers AI extraction and validation on a land record.
+ * Triggers AI extraction on an uploaded land record.
  *
- * Sprint B: extraction now returns potentially MULTIPLE rows per page (one row
- * per plot visible on the page). We persist ONE LandRecord per extracted row,
- * linked back to the source document via `documentId` (== the upload record's
- * `_id`), `rowIndex` (0-based), `pageNo` (1-based), and `extractionSource`.
+ * The heavy lifting (download → Gemini/Tesseract → per-row validation →
+ * persist child records → status routing → review queue + notifications)
+ * runs asynchronously in the extraction queue worker — see
+ * services/extraction/extractionPipeline.ts. This endpoint:
+ *   1. validates ownership,
+ *   2. guards against double extraction,
+ *   3. flips the document to `extracting`,
+ *   4. enqueues the job and returns 202 immediately.
  *
- * The original upload record's status is set to `extracted` once all rows
- * are persisted. Each child record is routed independently via the
- * confidence check (so a high-confidence row from the same page can be
- * auto-approved while a low-confidence sibling goes to needs_review).
+ * Clients poll GET /api/documents/:id/status (or GET /:id/extraction-status)
+ * to observe progress.
  *
  * POST /api/documents/:id/extract
  */
-export const triggerExtraction = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+export const triggerExtraction = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.user) {
+    const user = (req as AuthenticatedRequest).user;
+    if (!user) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-
     const { id } = req.params;
 
     // Fetch the LandRecord (this acts as the "document" — many child records
@@ -519,274 +544,29 @@ export const triggerExtraction = async (req: AuthenticatedRequest, res: Response
     }
 
     // Officers can only extract their own documents
-    const userRole = req.user.role || req.user.app_metadata?.role || req.user.user_metadata?.role;
-    const userId = req.user.id;
+    const userRole = user?.role || user?.app_metadata?.role || user?.user_metadata?.role;
+    const userId = user?.id;
     if (userRole === 'officer' && record.uploadedBy !== userId) {
       res.status(403).json({ error: 'Forbidden: You can only extract your own documents' });
       return;
     }
 
-    // Check if already extracted
-    if (record.status === 'extracted' || record.status === 'needs_review' || record.status === 'auto_approved') {
-      res.status(400).json({ error: 'Document already extracted' });
+    // Check if already extracted / in flight
+    if (
+      ['extracting', 'extracted', 'needs_review', 'auto_approved', 'reviewed_approved'].includes(
+        record.status,
+      )
+    ) {
+      res.status(400).json({ error: `Document already extracted (status: ${record.status})` });
       return;
     }
 
-    // Update status to "extracting"
+    // Update status to "extracting", then enqueue the background job.
     record.status = 'extracting';
     await record.save();
-    await extractionQueue.addJob({ id: record._id.toString() });
+    await extractionQueue.addJob({ id: record._id.toString(), requestedBy: userId ?? null });
+
     res.status(202).json({ recordId: record._id, status: 'extracting' });
-    return;
-
-    /*
-      console.log('[Extraction] Signed URL appears expired — regenerating...');
-      if (!record.storagePath) {
-        // Can't regenerate without the path; fail early with a clear message
-        record.status = 'extraction_failed';
-        record.extractionError = 'Signed URL expired and storagePath not available for regeneration';
-        await record.save();
-        res.status(500).json({ error: 'Signed URL expired and cannot be refreshed (missing storagePath)' });
-        return;
-      }
-
-      try {
-        downloadUrl = await regenerateSignedUrl(record.storagePath);
-        record.storageUrl = downloadUrl; // persist the refreshed URL
-        await record.save();
-        urlWasRefreshed = true;
-        console.log('[Extraction] Signed URL regenerated successfully.');
-      } catch (refreshError) {
-        console.error('[Extraction] Failed to regenerate signed URL:', refreshError);
-        record.status = 'extraction_failed';
-        record.extractionError = `Failed to regenerate expired signed URL: ${(refreshError as Error).message}`;
-        await record.save();
-        res.status(500).json({ error: 'Signed URL expired and regeneration failed', details: (refreshError as Error).message });
-        return;
-      }
-    }
-
-    // -----------------------------------------------------------------------
-    // STEP 2: Download file from Supabase (with one retry after URL refresh)
-    // -----------------------------------------------------------------------
-    let imageBuffer: Buffer;
-    let mimeType = 'image/jpeg'; // Default
-
-    try {
-      console.log(`[Extraction] Downloading file from: ${downloadUrl}`);
-      const response = await axios.get(downloadUrl, {
-        responseType: 'arraybuffer',
-        timeout: 30000, // 30 second timeout
-      });
-
-      imageBuffer = Buffer.from(response.data as ArrayBuffer);
-      const contentTypeHeader = response.headers['content-type'];
-      mimeType = (typeof contentTypeHeader === 'string' && contentTypeHeader) || 'image/jpeg';
-      console.log(`[Extraction] Downloaded ${imageBuffer.length} bytes, MIME: ${mimeType}`);
-    } catch (downloadError) {
-      console.error('[Extraction] Failed to download file:', downloadError);
-
-      // If we haven't tried a URL refresh yet, attempt it once more
-      if (!urlWasRefreshed && record.storagePath) {
-        console.log('[Extraction] Retrying after refreshing signed URL...');
-        try {
-          downloadUrl = await regenerateSignedUrl(record.storagePath);
-          record.storageUrl = downloadUrl;
-          await record.save();
-
-          const retryResponse = await axios.get(downloadUrl, {
-            responseType: 'arraybuffer',
-            timeout: 30000,
-          });
-          imageBuffer = Buffer.from(retryResponse.data as ArrayBuffer);
-          const retryContentType = retryResponse.headers['content-type'];
-          mimeType = (typeof retryContentType === 'string' && retryContentType) || 'image/jpeg';
-          console.log(`[Extraction] Retry download succeeded: ${imageBuffer.length} bytes`);
-        } catch (retryError) {
-          // Distinguish URL-refresh-then-fail from simple download failure
-          console.error('[Extraction] Download failed even after URL refresh:', retryError);
-          record.status = 'extraction_failed';
-          record.extractionError = `File download failed after URL refresh: ${(retryError as Error).message}`;
-          await record.save();
-          res.status(500).json({
-            error: 'File download failed after URL refresh',
-            details: (retryError as Error).message,
-          });
-          return;
-        }
-      } else {
-        record.status = 'extraction_failed';
-        record.extractionError = `Failed to download file: ${(downloadError as Error).message}`;
-        await record.save();
-        res.status(500).json({ error: 'Failed to download document from storage' });
-        return;
-      }
-    }
-
-    // -----------------------------------------------------------------------
-    // STEP 3: Extract fields — Gemini (multi-row) with Tesseract fallback.
-    // Returns one entry per plot row visible on the page.
-    // -----------------------------------------------------------------------
-    let extractionResult;
-    try {
-      console.log('[Extraction] Starting extraction (multi-row)...');
-      // For now we treat the upload as a single-page document (pageNo=1).
-      // Multi-page PDF support is a future extension — when added, this loop
-      // would call extractLandRecord once per page.
-      const pageNo = 1;
-      extractionResult = await extractLandRecord(imageBuffer, mimeType, pageNo);
-      console.log(
-        `[Extraction] Extraction succeeded (source: ${extractionResult.extractionSource}, ` +
-        `${extractionResult.rows.length} row(s)).`,
-      );
-    } catch (extractionError) {
-      console.error('[Extraction] Extraction failed:', extractionError);
-      record.status = 'extraction_failed';
-      record.extractionError = (extractionError as Error).message;
-      await record.save();
-      res.status(500).json({ error: 'Extraction failed', details: (extractionError as Error).message });
-      return;
-    }
-
-    // -----------------------------------------------------------------------
-    // STEP 4: Persist ONE LandRecord per extracted row, run per-row
-    // validation + routing.
-    // -----------------------------------------------------------------------
-    const documentId = record._id.toString(); // upload record id
-    const uploadedBy = record.uploadedBy;
-    const village = record.village;
-    const district = record.district;
-
-    const persistedRecords: Array<{
-      recordId: string;
-      rowIndex: number;
-      pageNo: number;
-      status: string;
-      extractionSource: string;
-      validationFlags: string[];
-      validationResults: ValidationFlag[];
-      lowConfidenceFields: string[];
-      rowConfidence: number;
-    }> = [];
-
-    for (let i = 0; i < extractionResult.rows.length; i++) {
-      const row = extractionResult.rows[i];
-
-      // Build the extractedFields sub-document for this row.
-      const extractedFields = {
-        ownerName: row.ownerName,
-        khasraNumber: row.khasraNumber,
-        plotArea: row.plotArea,
-        village: row.village,
-        district: row.district,
-        landClass: row.landClass,
-        khataNumber: row.khataNumber,
-        tehsil: row.tehsil,
-        subSurveyNumber: row.subSurveyNumber,
-        fatherOrHusbandName: row.fatherOrHusbandName,
-        remarks: row.remarks,
-      };
-
-      // --- Sprint C: per-row structured validation ---
-      const validationResults: ValidationFlag[] = [];
-      try {
-        const khasraNumberValue = row.khasraNumber?.value || null;
-        const subSurveyNumberValue = row.subSurveyNumber?.value || null;
-        const duplicateFlags = await detectDuplicateFlags({
-          khasraNumber: khasraNumberValue,
-          subSurveyNumber: subSurveyNumberValue,
-          village,
-          documentId,
-          excludeRecordId: undefined, // child record not yet saved
-          district,
-        });
-        validationResults.push(...duplicateFlags);
-
-        // Area-sum check — pass the current row's plotArea so it's counted.
-        const currentPlotArea = row.plotArea?.value || null;
-        const areaResult = await checkAreaSumFlags({
-          village,
-          villageAreaLimit: undefined,
-          excludeRecordId: undefined,
-          currentPlotArea,
-          documentId,
-        });
-        validationResults.push(...areaResult.flags);
-      } catch (validationError) {
-        console.warn(`[Extraction] Row ${i} validation warning (non-fatal):`, validationError);
-        validationResults.push({
-          rule: 'validation_exception',
-          severity: 'warning',
-          message: `Validation threw: ${(validationError as Error).message}`,
-        });
-      }
-
-      // --- Sprint C: per-row confidence routing with lowConfidenceFields ---
-      const routing = routeRowByConfidence(row, validationResults, env.CONFIDENCE_THRESHOLD);
-      const childStatus: 'needs_review' | 'auto_approved' = routing.status;
-      const legacyFlagStrings = validationResults.map((f) => f.rule);
-
-      // --- Persist the child record ---
-      const childRecord = new LandRecord({
-        // Document-scoped fields
-        documentId,
-        rowIndex: row.rowIndex,
-        pageNo: row.pageNo,
-
-        // Inherited from the upload record
-        filename: record.filename,
-        village,
-        district,
-        uploadedBy,
-        storagePath: record.storagePath,
-        storageUrl: record.storageUrl,
-
-        // Extraction output
-        extractedFields,
-        extractionSource: row.extractionSource,
-
-        // Sprint C: validation + routing
-        validationFlags: legacyFlagStrings, // legacy string[] for back-compat
-        validationResults,                  // structured flags { rule, severity, message, field? }
-        lowConfidenceFields: routing.lowConfidenceFields,
-        status: childStatus,
-      });
-
-      const saved = await childRecord.save();
-      persistedRecords.push({
-        recordId: saved._id.toString(),
-        rowIndex: row.rowIndex,
-        pageNo: row.pageNo,
-        status: childStatus,
-        extractionSource: row.extractionSource,
-        validationFlags: legacyFlagStrings,
-        validationResults,
-        lowConfidenceFields: routing.lowConfidenceFields,
-        rowConfidence: routing.rowConfidence,
-      });
-    }
-
-    // -----------------------------------------------------------------------
-    // STEP 5: Mark the upload (parent) record as extracted.
-    // We set its status to the worst status among the children —
-    // if any child needs_review, the parent is flagged as needs_review too
-    // so reviewers see the document in their queue.
-    // -----------------------------------------------------------------------
-    const anyChildNeedsReview = persistedRecords.some((r) => r.status === 'needs_review');
-    record.status = anyChildNeedsReview ? 'needs_review' : 'extracted';
-    record.extractionSource = extractionResult.extractionSource;
-    record.extractionError = null;
-    await record.save();
-
-    res.status(200).json({
-      recordId: record._id,
-      documentId,
-      status: record.status,
-      extractionSource: extractionResult.extractionSource,
-      rowsExtracted: persistedRecords.length,
-      childRecords: persistedRecords,
-      confidenceThreshold: env.CONFIDENCE_THRESHOLD,
-    }); */
   } catch (error) {
     console.error('[Extraction] Unexpected error:', error);
     res.status(500).json({ error: (error as Error).message });

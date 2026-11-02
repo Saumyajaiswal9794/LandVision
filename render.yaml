@@ -1,5 +1,5 @@
 # =============================================================================
-# Render Blueprint — LandVision backend (Express + Mongoose + pg/PostGIS)
+# Render Blueprint — LandVision backend (Express + Supabase Postgres)
 # =============================================================================
 # Deploy with one of:
 #   1. Render dashboard → New → Blueprint → connect this repo → apply.
@@ -30,8 +30,6 @@ services:
       # process.env.PORT at boot.
       - key: CLIENT_ORIGIN
         sync: false   # SET IN DASHBOARD: your deployed Vercel URL, e.g. https://landvision.vercel.app
-      - key: MONGODB_URI
-        sync: false   # SET IN DASHBOARD: MongoDB Atlas connection string
       - key: SUPABASE_URL
         sync: false   # SET IN DASHBOARD: https://YOUR-PROJECT.supabase.co
       - key: SUPABASE_ANON_KEY
@@ -39,7 +37,7 @@ services:
       - key: SUPABASE_SERVICE_KEY
         sync: false   # SET IN DASHBOARD: service-role key (server-only)
       - key: PG_CONNECTION_STRING
-        sync: false   # SET IN DASHBOARD: Render Postgres / Supabase Postgres w/ PostGIS
+        sync: false   # SET IN DASHBOARD: Supabase Postgres connection string (the only datastore)
       - key: GEMINI_API_KEY
         sync: false   # SET IN DASHBOARD: Google AI Studio key
       - key: CONFIDENCE_THRESHOLD

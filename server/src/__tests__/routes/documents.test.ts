@@ -63,6 +63,27 @@ vi.mock('../../services/storage/supabaseStorage', () => ({
   regenerateSignedUrl: vi.fn(async () => 'https://example.com/refreshed-url.jpg'),
 }));
 
+// Mock User model — requireAuth syncs users into MongoDB; there is no real
+// connection in unit tests, so stub findOne/create.
+vi.mock('../../models/User', () => ({
+  User: {
+    findBySupabaseId: vi.fn(async () => null),
+    create: vi.fn(async (data: any) => ({ role: data.role || 'officer', ...data })),
+    findByRoles: vi.fn(async () => []),
+  },
+  default: {},
+}));
+
+// Mock the extraction pipeline + queue so no real extraction runs in tests.
+vi.mock('../../services/extraction/extractionPipeline', () => ({
+  runExtractionForDocument: vi.fn(async () => ({
+    documentId: 'mock-doc-id',
+    status: 'extracted',
+    extractionSource: 'tesseract',
+    rowsExtracted: 1,
+  })),
+}));
+
 // Mock LandRecord mongoose model.
 // The controller calls `new LandRecord(...)`, so the mock must be a constructor.
 vi.mock('../../models/LandRecord', () => {

@@ -202,6 +202,83 @@ class ApiClient {
       body: JSON.stringify(body),
     });
   }
+
+  // --- Admin (requireRole(['admin']) server-side) ---------------------------
+
+  async listUsers(): Promise<{ users: AdminUser[] }> {
+    return this.request('/api/admin/users');
+  }
+
+  async updateUserRole(userId: string, role: 'officer' | 'reviewer' | 'admin'): Promise<{ user: AdminUser }> {
+    return this.request(`/api/admin/users/${userId}/role`, {
+      method: 'PUT',
+      body: JSON.stringify({ role }),
+    });
+  }
+
+  async listAuditLogs(limit = 100): Promise<{ logs: AuditLogEntry[] }> {
+    return this.request(`/api/audit?limit=${limit}`);
+  }
+
+  async listApiUsage(limit = 100): Promise<{ usage: ApiUsageEntry[]; totalCost: number }> {
+    return this.request(`/api/admin/usage?limit=${limit}`);
+  }
+
+  async listNotifications(): Promise<{ notifications: NotificationEntry[] }> {
+    return this.request('/api/notifications');
+  }
+
+  async markNotificationRead(id: string): Promise<unknown> {
+    return this.request(`/api/notifications/${id}/read`, { method: 'PATCH' });
+  }
+
+  async markAllNotificationsRead(): Promise<{ success: boolean }> {
+    return this.request('/api/notifications/read-all', { method: 'POST' });
+  }
+}
+
+export interface AdminUser {
+  id: string;
+  supabaseId?: string;
+  email: string;
+  role: 'officer' | 'reviewer' | 'admin';
+  name?: string | null;
+  lastLoginAt?: string | null;
+  createdAt: string;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  userId: string;
+  userEmail?: string | null;
+  action: string;
+  resourceType: string;
+  resourceId?: string | null;
+  ip?: string | null;
+  userAgent?: string | null;
+  timestamp: string;
+}
+
+export interface ApiUsageEntry {
+  id: string;
+  userId?: string | null;
+  documentId?: string | null;
+  modelName: string;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  totalTokens?: number | null;
+  cost?: number | null;
+  operation: string;
+  timestamp: string;
+}
+
+export interface NotificationEntry {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  read: boolean;
+  createdAt: string;
 }
 
 export const api = new ApiClient();

@@ -6,6 +6,13 @@ import {
   GeminiBox2D,
 } from './bboxConverter';
 import { BoundingBox, ExtractedField } from '@landvision/types';
+import { recordGeminiUsage } from '../usage/apiUsage';
+
+/** Optional attribution context recorded with every Gemini usage row. */
+export interface GeminiUsageContext {
+  userId?: string | null;
+  documentId?: string | null;
+}
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -303,6 +310,7 @@ function convertRows(parsed: GeminiMultiRowResult, pageNo: number): ConvertedRow
 export async function callGeminiOnce(
   imageBuffer: Buffer,
   mimeType: string,
+  usage?: GeminiUsageContext,
 ): Promise<GeminiMultiRowResult> {
   if (!env.GEMINI_API_KEY) {
     throw new GeminiError('GEMINI_API_KEY not configured');
@@ -312,6 +320,7 @@ export async function callGeminiOnce(
   const base64Image = imageBuffer.toString('base64');
 
   let responseText: string;
+  let usageMetadata: { promptTokenCount?: number; candidatesTokenCount?: number } | undefined;
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
@@ -337,6 +346,14 @@ export async function callGeminiOnce(
       },
     });
     responseText = response.text ?? '';
+    const meta = (response as { usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number } })
+      .usageMetadata;
+    if (meta) {
+      usageMetadata = {
+        promptTokenCount: meta.promptTokenCount,
+        candidatesTokenCount: meta.candidatesTokenCount,
+      };
+    }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     if (
@@ -348,6 +365,17 @@ export async function callGeminiOnce(
       throw new GeminiRateLimitError(`Gemini API rate limit: ${msg}`);
     }
     throw new GeminiError(`Gemini API call failed: ${msg}`);
+  }
+
+  // Record token usage for the admin usage/cost dashboard (non-fatal).
+  if (usageMetadata) {
+    void recordGeminiUsage({
+      userId: usage?.userId ?? null,
+      documentId: usage?.documentId ?? null,
+      promptTokens: usageMetadata.promptTokenCount ?? null,
+      completionTokens: usageMetadata.candidatesTokenCount ?? null,
+      operation: 'extraction',
+    });
   }
 
   if (!responseText || responseText.trim().length === 0) {
@@ -395,6 +423,7 @@ export async function extractWithGemini(
   imageBuffer: Buffer,
   mimeType: string,
   pageNo: number = 1,
+  usage?: GeminiUsageContext,
 ): Promise<GeminiExtractionOutput> {
   // ---------------------------------------------------------------------
   // PHASE 1: 429 backoff — up to 3 attempts total (1 initial + 2 retries).
@@ -416,7 +445,7 @@ export async function extractWithGemini(
 
       for (let zodAttempt = 0; zodAttempt <= MAX_ZOD_RETRIES; zodAttempt++) {
         try {
-          parsed = await callGeminiOnce(imageBuffer, mimeType);
+          parsed = await callGeminiOnce(imageBuffer, mimeType, usage);
           break; // success
         } catch (err) {
           if (err instanceof GeminiRateLimitError) {

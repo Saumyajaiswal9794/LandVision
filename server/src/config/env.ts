@@ -54,7 +54,6 @@ if (fs.existsSync(ENV_FILE_PATH)) {
 }
 
 const REQUIRED_ENV_VARS = [
-  'MONGODB_URI',
   'SUPABASE_URL',
   'SUPABASE_ANON_KEY',
   'SUPABASE_SERVICE_KEY',
@@ -91,12 +90,12 @@ export const env = {
   PORT: parseInt(process.env.PORT || '4000', 10),
   NODE_ENV: process.env.NODE_ENV || 'development',
 
+  // Redis (optional — enables the BullMQ-backed extraction queue)
+  REDIS_URL: process.env.REDIS_URL || '',
+
   // CORS: comma-separated list of allowed browser origins for the frontend.
   // Falls back to localhost:3000 so local dev keeps working without an env file.
   CLIENT_ORIGIN: process.env.CLIENT_ORIGIN || 'http://localhost:3000',
-
-  // MongoDB
-  MONGODB_URI: process.env.MONGODB_URI || 'mongodb://localhost:27017/landvision',
 
   // Supabase (Auth + Storage)
   SUPABASE_URL: process.env.SUPABASE_URL || '',
@@ -114,6 +113,9 @@ export const env = {
 
   // Area validation: max total plot area per village (in hectares, default 500)
   VILLAGE_AREA_LIMIT_HECTARES: parseFloat(process.env.VILLAGE_AREA_LIMIT_HECTARES || '500'),
+  
+  // Auth bypass for development only
+  ALLOW_DEV_AUTH_BYPASS: process.env.ALLOW_DEV_AUTH_BYPASS || 'false',
 };
 
 /**

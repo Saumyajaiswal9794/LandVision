@@ -1,10 +1,15 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { uploadDocument, getDocumentStatus, triggerExtraction, listDocuments, getDocumentDetail, reviewDocument } from '../controllers/documentsController';
+import { uploadRateLimiter, extractRateLimiter, apiRateLimiter } from '../middleware/rateLimiter';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
+import { auditLogger } from '../middleware/auditLogger';
 
 const router = Router();
+
+router.use(requireAuth);
+router.use(apiRateLimiter);
 
 // Multer configuration for file upload
 const upload = multer({
@@ -55,19 +60,35 @@ const multerErrorHandler = (err: any, req: Request, res: Response, next: NextFun
 };
 
 // Sprint 3: List all documents (role-filtered) — MUST be before /:id routes
-router.get('/', requireAuth, listDocuments);
+router.get('/', listDocuments);
 
 // Sprint 3: Get full document detail
-router.get('/:id', requireAuth, getDocumentDetail);
+router.get('/:id', getDocumentDetail);
 
 // Sprint 3: Review action (reviewer-only)
-router.patch('/:id/review', requireAuth, requireRole(['reviewer']), reviewDocument);
+router.patch(
+  '/:id/review',
+  requireRole(['reviewer']),
+  auditLogger('document.review', 'document'),
+  reviewDocument,
+);
+
+// Extraction status endpoint
+router.get('/:id/extraction-status', getDocumentStatus);
 
 // Sprint 1: Upload document (officer-only)
-router.post('/upload', requireAuth, requireRole(['officer']), upload.single('file'), multerErrorHandler, uploadDocument);
+router.post(
+  '/upload',
+  requireRole(['officer']),
+  uploadRateLimiter,
+  upload.single('file'),
+  multerErrorHandler,
+  auditLogger('document.upload', 'document'),
+  uploadDocument,
+);
 
 // Sprint 1-2: Legacy status and extraction routes
-router.get('/:id/status', requireAuth, getDocumentStatus);
-router.post('/:id/extract', requireAuth, triggerExtraction);
+router.get('/:id/status', getDocumentStatus);
+router.post('/:id/extract', extractRateLimiter, auditLogger('document.extract', 'document'), triggerExtraction);
 
 export default router;

@@ -1,40 +1,50 @@
 // server/src/queues/extractionQueue.ts
+//
+// Background extraction queue. When REDIS_URL is configured this runs on
+// BullMQ; otherwise it degrades to a bounded-concurrency in-memory queue so
+// local development and single-instance demo deploys keep working.
+//
+// The worker executes the FULL extraction pipeline (download → Gemini /
+// Tesseract → per-row validation → persist child records → status routing).
+// See services/extraction/extractionPipeline.ts.
 import { env } from '../config/env';
-import { Queue, Worker, Job } from 'bullmq';
-import { LandRecord } from '../models/LandRecord';
+import type { Job } from 'bullmq';
+import { runExtractionForDocument, ExtractionPipelineResult } from '../services/extraction/extractionPipeline';
 
-// Simple processing function: for demo, just set status to 'extracted'
-async function processExtractionJob(id: string): Promise<void> {
-  const record = await LandRecord.findById(id);
-  if (!record) {
-    console.warn(`[ExtractionQueue] Record ${id} not found`);
-    return;
-  }
-  // For now we simply mark as extracted; real extraction logic stays in controller.
-  record.status = 'extracted';
-  await record.save();
+export interface ExtractionJobPayload {
+  /** The uploaded document (parent LandRecord) id to process. */
+  id: string;
+  /** Supabase user id that requested the extraction (for attribution). */
+  requestedBy?: string | null;
 }
 
-let queueAddJob: (payload: { id: string }) => Promise<void>;
+let queueAddJob: (payload: ExtractionJobPayload) => Promise<void>;
 
-if (process.env.REDIS_URL) {
-  const connection = { url: process.env.REDIS_URL };
+if (env.REDIS_URL) {
+  // Lazy-require BullMQ only when Redis is actually configured, so the
+  // dependency isn't loaded in the default in-memory mode.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { Queue, Worker } = require('bullmq');
+  const connection = { url: env.REDIS_URL };
   const queue = new Queue('extraction', { connection });
-  // Scheduler ensures delayed jobs work correctly
 
   const worker = new Worker(
     'extraction',
     async (job: Job) => {
-      await processExtractionJob(job.data.id);
+      await runExtractionForDocument(job.data.id, job.data.requestedBy ?? null);
     },
-    { connection, concurrency: 2 }
+    { connection, concurrency: 2 },
   );
+  worker.on('failed', (job: Job | undefined, err: Error) => {
+    console.error(`[ExtractionQueue] Job ${job?.id} failed:`, err);
+  });
+
   queueAddJob = async (payload) => {
     await queue.add('extract', payload);
   };
 } else {
-  // In‑memory queue with bounded concurrency of 2
-  const pending: { id: string }[] = [];
+  // In-memory queue with bounded concurrency of 2.
+  const pending: ExtractionJobPayload[] = [];
   let active = 0;
   const maxConcurrency = 2;
   const runNext = async () => {
@@ -42,8 +52,19 @@ if (process.env.REDIS_URL) {
       const job = pending.shift();
       if (!job) break;
       active++;
-      // fire‑and‑forget – errors are logged but do not stop queue
-      processExtractionJob(job.id)
+      // fire-and-forget — the pipeline never throws, but we log defensively.
+      runExtractionForDocument(job.id, job.requestedBy ?? null)
+        .then((result: ExtractionPipelineResult) => {
+          if (result.status === 'extraction_failed') {
+            console.warn(
+              `[ExtractionQueue] Job for ${result.documentId} finished with extraction_failed: ${result.error}`,
+            );
+          } else {
+            console.log(
+              `[ExtractionQueue] Job for ${result.documentId} finished: ${result.status} (${result.rowsExtracted} row(s)).`,
+            );
+          }
+        })
         .catch((e) => console.error('[ExtractionQueue] job error', e))
         .finally(() => {
           active--;
@@ -52,7 +73,7 @@ if (process.env.REDIS_URL) {
     }
   };
   queueAddJob = async (payload) => {
-    pending.push({ id: payload.id });
+    pending.push(payload);
     runNext();
   };
 }

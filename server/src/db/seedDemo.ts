@@ -1,5 +1,4 @@
 import 'dotenv/config';
-import mongoose from 'mongoose';
 import { LandRecord } from '../models/LandRecord';
 import { env } from '../config/env';
 
@@ -284,11 +283,8 @@ const demoRecords = [
 // Seeder
 // ---------------------------------------------------------------------------
 async function seedDemo() {
-  console.log('[seedDemo] Connecting to MongoDB...');
-  await mongoose.connect(env.MONGODB_URI);
-
   console.log('[seedDemo] Clearing existing LandRecords...');
-  await LandRecord.deleteMany({});
+  await LandRecord.deleteAll();
 
   console.log(`[seedDemo] Inserting ${demoRecords.length} demo records...`);
   await LandRecord.insertMany(demoRecords);
@@ -320,7 +316,6 @@ async function seedDemo() {
   console.log('[seedDemo] Extraction sources covered: gemini, tesseract, (none for uploaded/extracting)');
 
   console.log('\n[seedDemo] Done. Next step: run `npm run seed:plots` so the map polygons match.');
-  await mongoose.disconnect();
 }
 
 seedDemo().catch((err) => {

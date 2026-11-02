@@ -1,15 +1,9 @@
 import { Request, Response } from 'express';
-import { AuthenticatedRequest } from '../middleware/auth';
 import { getPlotByKhasra, getPlotsByVillage } from '../services/gis/plotQueries';
 
 // Sprint 4: Get all plots for a village as GeoJSON FeatureCollection
-export const getVillagePlots = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+export const getVillagePlots = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.user) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-
     const { villageName } = req.params;
 
     if (!villageName) {
@@ -26,13 +20,8 @@ export const getVillagePlots = async (req: AuthenticatedRequest, res: Response):
 };
 
 // Sprint 4: Get a single plot by khasra number
-export const getPlotByKhasraRoute = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+export const getPlotByKhasraRoute = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.user) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-
     const { khasraNumber } = req.params;
     const village = req.query.village as string | undefined;
 

@@ -1,15 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock the LandRecord model before importing the validator.
-vi.mock('../../../models/LandRecord', () => {
-  const find = vi.fn();
-  return {
-    LandRecord: {
-      find,
-      findOne: vi.fn(),
-    },
-  };
-});
+vi.mock('../../../models/LandRecord', () => ({
+  LandRecord: {
+    // The validator now sums plotArea strings returned by a single
+    // SQL-backed query (LandRecord.getPlotAreaValuesForVillage).
+    getPlotAreaValuesForVillage: vi.fn(),
+  },
+}));
 
 // Mock env so VILLAGE_AREA_LIMIT_HECTARES is deterministic.
 vi.mock('../../../config/env', () => ({
@@ -22,14 +20,19 @@ vi.mock('../../../config/env', () => ({
 import { checkAreaSumFlags, parsePlotArea } from '../areaSumCheck';
 import { LandRecord } from '../../../models/LandRecord';
 
-const mockFind = LandRecord.find as unknown as ReturnType<typeof vi.fn>;
+const mockGetPlotAreas = LandRecord.getPlotAreaValuesForVillage as unknown as ReturnType<
+  typeof vi.fn
+>;
 
 function setFindResult(rows: any[]) {
-  mockFind.mockReset();
-  const cursor = {
-    lean: vi.fn().mockResolvedValue(rows),
-  };
-  mockFind.mockReturnValue(cursor);
+  mockGetPlotAreas.mockReset();
+  // Rows keep the old document shape; the mock maps them to the plotArea
+  // strings the SQL query returns.
+  mockGetPlotAreas.mockResolvedValue(
+    rows
+      .map((r) => r.extractedFields?.plotArea?.value)
+      .filter((v) => typeof v === 'string'),
+  );
 }
 
 describe('parsePlotArea', () => {
@@ -64,7 +67,7 @@ describe('parsePlotArea', () => {
 
 describe('checkAreaSumFlags', () => {
   beforeEach(() => {
-    mockFind.mockReset();
+    mockGetPlotAreas.mockReset();
   });
 
   it('flags exceeds_village_total when sum exceeds the limit', async () => {
@@ -163,9 +166,7 @@ describe('checkAreaSumFlags', () => {
   });
 
   it('returns a warning flag on internal error', async () => {
-    mockFind.mockImplementation(() => {
-      throw new Error('DB connection failed');
-    });
+    mockGetPlotAreas.mockRejectedValue(new Error('DB connection failed'));
     const result = await checkAreaSumFlags({
       village: 'Rampur',
       villageAreaLimit: 500,

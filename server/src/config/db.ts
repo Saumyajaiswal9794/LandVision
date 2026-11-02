@@ -1,35 +1,33 @@
-import mongoose from 'mongoose';
 import { Pool } from 'pg';
 import { env } from './env';
 
-// 1. MongoDB Connection Setup (using Mongoose)
-export const connectMongoDB = async (): Promise<void> => {
-  if (!env.MONGODB_URI) {
-    console.warn('[db] MONGODB_URI not set — skipping MongoDB connection.');
-    return;
-  }
-  try {
-    await mongoose.connect(env.MONGODB_URI);
-    console.log('Successfully connected to MongoDB');
-  } catch (error) {
-    console.error('MongoDB connection error:', error);
-    process.exit(1);
-  }
-};
-
-// 2. PostgreSQL / PostGIS Connection Setup (using pg Pool)
-// Only create the pool when PG_CONNECTION_STRING is configured — pg crashes if
-// it receives an empty connection string / null password at module load time.
+/**
+ * PostgreSQL / PostGIS connection pool.
+ *
+ * Since the Supabase-only migration this is the app's ONLY datastore — land
+ * records, users, audit logs, usage, notifications and the review queue all
+ * live in Supabase Postgres (JSONB columns hold nested payloads). Locally the
+ * docker-compose PostGIS service stands in for Supabase.
+ *
+ * The pool is only created when PG_CONNECTION_STRING is configured — pg
+ * crashes if it receives an empty connection string / null password at
+ * module load time.
+ */
 export const pgPool: Pool | null = env.PG_CONNECTION_STRING
   ? new Pool({
       connectionString: env.PG_CONNECTION_STRING,
+      // Supabase requires SSL; the local docker PostGIS does not.
       ssl: env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+      max: 10,
     })
   : null;
 
 export const connectPostgres = async (): Promise<void> => {
   if (!pgPool) {
-    console.warn('[db] PG_CONNECTION_STRING not set — skipping PostgreSQL connection.');
+    console.warn(
+      '[db] PG_CONNECTION_STRING not set — the server cannot reach its database. ' +
+        'Set it to your Supabase Postgres connection string (or the local docker PostGIS).',
+    );
     return;
   }
   try {
@@ -41,8 +39,7 @@ export const connectPostgres = async (): Promise<void> => {
     if (env.NODE_ENV === 'production') {
       process.exit(1);
     } else {
-      console.warn('[db:warn] PostgreSQL is not reachable locally. The server is continuing in development mode without PostGIS.');
+      console.warn('[db:warn] PostgreSQL is not reachable locally. The server is continuing in development mode without a database.');
     }
   }
 };
-

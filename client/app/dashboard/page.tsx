@@ -2,14 +2,13 @@
 
 import React, { useEffect, useState, useCallback, useMemo, Suspense } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { supabase } from '@/lib/supabaseClient';
+import { useSearchParams } from 'next/navigation';
 import { Card, CardHeader, CardTitle, CardContent } from '../../components/card';
 import { Button } from '../../components/button';
 import { FileText, Filter, RefreshCw, Eye, UploadCloud, FileStack, ClipboardCheck, CheckCircle2 } from 'lucide-react';
 import { ApiErrorFallback } from '../../components/ErrorBoundary';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+import { useNavContext } from '../navBarWrapper';
+import api, { DocumentListItem } from '../../lib/api';
 
 // --- Status badge configuration ---
 // Keys match the EXACT status enum values in the LandRecord schema
@@ -32,59 +31,36 @@ const IN_PIPELINE_STATUSES = ['uploaded', 'extracting', 'extracted', 'extraction
 const PENDING_REVIEW_STATUSES = ['needs_review'];
 const DIGITIZED_STATUSES = ['auto_approved', 'reviewed_approved'];
 
-interface DocumentListItem {
-  recordId: string;
-  filename: string;
-  village: string;
-  district: string;
-  status: string;
-  extractionSource: string | null;
-  createdAt: string;
-}
-
 function DashboardContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
+  const { role } = useNavContext();
   const [documents, setDocuments] = useState<DocumentListItem[]>([]);
   // allDocuments holds the UNFILTERED snapshot so the summary cards always
   // show true totals — the visible table below respects statusFilter, but
   // the cards must not change when the user filters.
   const [allDocuments, setAllDocuments] = useState<DocumentListItem[]>([]);
-  const [role, setRole] = useState<'officer' | 'reviewer' | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '');
 
+  const toFriendlyError = (err: unknown): string => {
+    const e = err as Error;
+    const isNetwork =
+      e.message.includes('Failed to fetch') ||
+      e.message.includes('Network request failed') ||
+      e.message.toLowerCase().includes('network');
+    return isNetwork
+      ? 'Could not reach the LandVision backend. The service may be starting up (Render free tier cold start) or your network may be down. Click retry to try again.'
+      : e.message;
+  };
+
   // Fetch the unfiltered document list and store it for the summary cards.
   // Called once on mount (and on manual refresh) — does NOT depend on filter.
+  // Uses the typed API client, which injects the Supabase auth header.
   const fetchAllDocuments = useCallback(async (): Promise<DocumentListItem[]> => {
-    if (!supabase) {
-      router.push('/login');
-      return [];
-    }
-    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-    if (sessionError || !sessionData.session) {
-      router.push('/login');
-      return [];
-    }
-    const token = sessionData.session.access_token;
-    const userRole = sessionData.session.user?.app_metadata?.role || sessionData.session.user?.user_metadata?.role || 'officer';
-    setRole(userRole);
-
-    const res = await fetch(`${API_BASE_URL}/api/documents`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (res.status === 401) {
-      router.push('/login');
-      return [];
-    }
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `Failed to fetch documents (${res.status})`);
-    }
-    const data = await res.json();
-    return (data.documents || []) as DocumentListItem[];
-  }, [router]);
+    const data = await api.listDocuments();
+    return data.documents || [];
+  }, []);
 
   // Fetch the (possibly filtered) document list for the visible table.
   const fetchDocuments = useCallback(async (filter: string) => {
@@ -92,41 +68,7 @@ function DashboardContent() {
     setError('');
 
     try {
-      if (!supabase) {
-        router.push('/login');
-        return;
-      }
-
-      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-      if (sessionError || !sessionData.session) {
-        router.push('/login');
-        return;
-      }
-
-      const token = sessionData.session.access_token;
-      const userRole = sessionData.session.user?.app_metadata?.role || sessionData.session.user?.user_metadata?.role || 'officer';
-      setRole(userRole);
-
-      let url = `${API_BASE_URL}/api/documents`;
-      if (filter) {
-        url += `?status=${encodeURIComponent(filter)}`;
-      }
-
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (res.status === 401) {
-        router.push('/login');
-        return;
-      }
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `Failed to fetch documents (${res.status})`);
-      }
-
-      const data = await res.json();
+      const data = await api.listDocuments(filter || undefined);
       const docs: DocumentListItem[] = data.documents || [];
       setDocuments(docs);
       // If we just did an unfiltered fetch, also update allDocuments so the
@@ -137,19 +79,11 @@ function DashboardContent() {
     } catch (err) {
       // Distinguish network failures (CORS, backend down, no internet) from
       // server errors so the fallback message is actually useful.
-      const e = err as Error;
-      const isNetwork =
-        e.message.includes('Failed to fetch') ||
-        e.message.includes('Network request failed') ||
-        e.message.toLowerCase().includes('network');
-      const friendly = isNetwork
-        ? 'Could not reach the LandVision backend. The service may be starting up (Render free tier cold start) or your network may be down. Click retry to try again.'
-        : e.message;
-      setError(friendly);
+      setError(toFriendlyError(err));
     } finally {
       setLoading(false);
     }
-  }, [router]);
+  }, []);
 
   // On mount: fetch BOTH the unfiltered snapshot (for cards) and the filtered
   // list (for the table). When no filter is set these are the same request —
@@ -168,16 +102,7 @@ function DashboardContent() {
           await fetchDocuments(statusFilter);
         }
       } catch (err) {
-        const e = err as Error;
-        const isNetwork =
-          e.message.includes('Failed to fetch') ||
-          e.message.includes('Network request failed') ||
-          e.message.toLowerCase().includes('network');
-        setError(
-          isNetwork
-            ? 'Could not reach the LandVision backend. The service may be starting up (Render free tier cold start) or your network may be down. Click retry to try again.'
-            : e.message,
-        );
+        setError(toFriendlyError(err));
         setLoading(false);
       }
     })();

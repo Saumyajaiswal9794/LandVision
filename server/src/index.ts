@@ -5,11 +5,12 @@
 // or directly from inside /server (CWD = /server). Importing env.ts first
 // thing below triggers the load before any other module reads process.env.
 import express, { Request, Response, NextFunction } from 'express';
-import mongoose from 'mongoose';
 import cors from 'cors';
+import helmet from 'helmet';
 import { env, getAllowedOrigins } from './config/env';
-import { connectMongoDB, connectPostgres, pgPool } from './config/db';
+import { connectPostgres, pgPool } from './config/db';
 import errorHandler from './middleware/errorHandler';
+import { AuthenticatedRequest } from './middleware/auth';
 import pino from 'pino';
 import { Server } from 'http';
 const logger = pino({
@@ -37,8 +38,15 @@ import documentRoutes from './routes/documents';
 import recordRoutes from './routes/records';
 import authRoutes from './routes/auth';
 import gisRoutes from './routes/gis';
+import adminRoutes from './routes/admin';
+import reviewQueueRoutes from './routes/reviewQueue';
+import notificationRoutes from './routes/notifications';
+import auditRoutes from './routes/audit';
 
 const app = express();
+
+// Security headers
+app.use(helmet());
 
 // --- CORS --------------------------------------------------------------------
 // Allow only the configured frontend origins (env.CLIENT_ORIGIN).
@@ -64,12 +72,42 @@ app.use(pinoHttp({
   logger,
   genReqId: (req) => (req.headers['x-request-id'] as string) || crypto.randomUUID()
 }));
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  next();
+});
+
+// --- Dev-only: inject default user for local development without auth ---
+// Never active in production. Only injects when the request carries NO
+// Authorization header, so real Supabase tokens still authenticate (and
+// sync) normally even with the bypass enabled. requireAuth honours the
+// pre-attached user and skips token verification (see src/middleware/auth.ts).
+if (process.env.NODE_ENV !== 'production' && process.env.ALLOW_DEV_AUTH_BYPASS === 'true') {
+  app.use((req: Request, _res, next) => {
+    if (!req.headers.authorization) {
+      (req as AuthenticatedRequest).user = {
+        id: 'dev-user',
+        email: 'dev@example.com',
+        role: 'officer',
+        app_metadata: { role: 'officer' },
+        user_metadata: { role: 'officer' },
+      };
+    }
+    next();
+  });
+}
 
 // --- Routes ------------------------------------------------------------------
 app.use('/api/documents', documentRoutes);
 app.use('/api/records', recordRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/gis', gisRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/review-queue', reviewQueueRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/audit', auditRoutes);
 
 // Health Check Route
 app.get('/health', (_req, res) => {
@@ -79,11 +117,8 @@ app.get('/health', (_req, res) => {
 // Readiness endpoint checks DB connections
 app.get('/ready', async (_req, res) => {
   const dependencies: Record<string, string> = {};
-  // MongoDB check
-  const mongoUp = (await import('mongoose')).default.connection.readyState === 1;
-  dependencies.mongo = mongoUp ? 'up' : 'down';
-  // Postgres check
-  const { pgPool } = await import('./config/db');
+  // Postgres check — pgPool is imported at the top of this module. This is
+  // the app's ONLY datastore (Supabase Postgres / local docker PostGIS).
   let pgUp = false;
   if (pgPool) {
     try {
@@ -121,7 +156,6 @@ const bootstrap = async () => {
   try {
     // Only connect and listen in non-test modes
     if (process.env.NODE_ENV !== 'test') {
-      await connectMongoDB();
       await connectPostgres();
 
       // Render assigns PORT dynamically — always read env.PORT, never a hardcoded value.
@@ -139,6 +173,18 @@ const bootstrap = async () => {
 
 bootstrap();
 
+// --- Process-level safety net ------------------------------------------------
+// tesseract.js can emit worker errors (e.g. corrupt/undecodable images) that
+// surface as uncaught exceptions rather than promise rejections. Without this
+// handler a single bad scan would crash the whole server. Log and keep
+// serving — the extraction pipeline already records extraction_failed.
+process.on('uncaughtException', (err) => {
+  logger.error({ err }, 'Uncaught exception (server kept alive)');
+});
+process.on('unhandledRejection', (reason) => {
+  logger.error({ err: reason }, 'Unhandled promise rejection (server kept alive)');
+});
+
 // Graceful shutdown handling
 const gracefulShutdown = async (signal: string) => {
   if (shuttingDown) return;
@@ -153,20 +199,14 @@ const gracefulShutdown = async (signal: string) => {
   server?.close(() => {
     logger.info('HTTP server closed');
   });
-  // Close MongoDB connection
-  try {
-    await mongoose.disconnect();
-    logger.info('MongoDB disconnected');
-  } catch (err) {
-    logger.error('Error disconnecting MongoDB', err);
-  }
+  // Close the Postgres pool (the app's only datastore)
   // Close Postgres pool
   if (pgPool) {
     try {
       await pgPool.end();
       logger.info('PostgreSQL pool closed');
-    } catch (err) {
-      logger.error('Error closing PostgreSQL pool', err);
+    } catch (err: unknown) {
+      logger.error({ err }, 'Error closing PostgreSQL pool');
     }
   }
   // No extraction queue stop function present.

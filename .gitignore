@@ -8,3 +8,9 @@ node_modules/
 .env.production.local
 .turbo
 dist
+
+# Kilo assistant config
+.kilo/
+
+# Tesseract language data (downloaded at runtime)
+*.traineddata

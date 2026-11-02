@@ -1,44 +1,45 @@
 // server/src/__tests__/queues/extractionQueue.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { extractionQueue } from '../../queues/extractionQueue.js';
 
-// Mock LandRecord model
-vi.mock('../../models/LandRecord.js', () => {
-  const mockRecord = {
-    _id: 'doc123',
-    status: 'uploaded',
-    save: vi.fn().mockResolvedValue(undefined),
-  };
-  return {
-    LandRecord: {
-      findById: vi.fn().mockImplementation((id: string) => {
-        if (id === mockRecord._id) {
-          return Promise.resolve(mockRecord as any);
-        }
-        return Promise.resolve(null);
-      }),
-    },
-    default: {} as any,
-  };
-});
+// Mock the extraction pipeline — the queue is a thin dispatcher around it.
+const runExtractionForDocument = vi.fn(
+  async (_id: string, _requestedBy?: string | null) => ({
+    documentId: _id,
+    status: 'extracted' as const,
+    extractionSource: 'tesseract' as const,
+    rowsExtracted: 1,
+  }),
+);
 
-describe('extractionQueue (in‑memory)', () => {
+vi.mock('../../services/extraction/extractionPipeline.js', () => ({
+  runExtractionForDocument: (...args: [string, string | null | undefined]) =>
+    runExtractionForDocument(...args),
+}));
+
+describe('extractionQueue (in-memory)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('processes a job and marks record as extracted', async () => {
-    const { LandRecord } = await import('../../models/LandRecord.js');
-    const mock = (await LandRecord.findById('doc123')) as any;
-    // Ensure initial state
-    expect(mock.status).toBe('uploaded');
+  it('delegates each queued job to the extraction pipeline', async () => {
+    const { extractionQueue } = await import('../../queues/extractionQueue.js');
 
-    await extractionQueue.addJob({ id: 'doc123' });
-    // Wait a tick for async processing (in‑memory runs fire‑and‑forget)
-    await new Promise((r) => setTimeout(r, 10));
+    await extractionQueue.addJob({ id: 'doc123', requestedBy: 'user-1' });
+    // Wait a tick for async processing (in-memory runs fire-and-forget)
+    await new Promise((r) => setTimeout(r, 20));
 
-    // After processing, the mocked record should have status updated to 'extracted'
-    expect(mock.save).toHaveBeenCalled();
-    expect(mock.status).toBe('extracted');
+    expect(runExtractionForDocument).toHaveBeenCalledWith('doc123', 'user-1');
+  });
+
+  it('processes multiple queued jobs', async () => {
+    const { extractionQueue } = await import('../../queues/extractionQueue.js');
+
+    await extractionQueue.addJob({ id: 'a' });
+    await extractionQueue.addJob({ id: 'b' });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const ids = runExtractionForDocument.mock.calls.map((c) => c[0]);
+    expect(ids).toContain('a');
+    expect(ids).toContain('b');
   });
 });

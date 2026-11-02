@@ -1,11 +1,13 @@
 'use client';
 
-import React, { useEffect, useState, createContext, useContext } from 'react';
+import React, { useEffect, useState, createContext, useContext, useCallback } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { NavBar } from '@/components/navBar';
 
-const NavContext = createContext<{ role: 'officer' | 'reviewer' | null; loading: boolean }>({
+export type UserRole = 'officer' | 'reviewer' | 'admin';
+
+const NavContext = createContext<{ role: UserRole | null; loading: boolean }>({
   role: null,
   loading: true,
 });
@@ -15,17 +17,15 @@ export const useNavContext = () => useContext(NavContext);
 /**
  * Pages that don't need the nav bar or auth check.
  *
- * Note: '/' is intentionally NOT in this list — the root route now does its
- * own auth-aware redirect to /dashboard or /login (see app/page.tsx) and we
- * want NavBarWrapper's auth listener to run for it too, as a backstop in
- * case the root page's redirect is slow or fails.
+ * Note: '/' is intentionally NOT in this list — the root route does its
+ * own auth-aware redirect to /dashboard or /login (see app/page.tsx).
  */
-const PUBLIC_PATHS = ['/login', '/signup'];
+const PUBLIC_PATHS = ['/login', '/signup', '/auth/callback'];
 
 export function NavBarWrapper({ children }: { children?: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [role, setRole] = useState<'officer' | 'reviewer' | null>(null);
+  const [role, setRole] = useState<UserRole | null>(null);
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
 
@@ -33,64 +33,92 @@ export function NavBarWrapper({ children }: { children?: React.ReactNode }) {
     (p) => pathname === p || (p !== '/' && pathname.startsWith(p)),
   );
 
-  useEffect(() => {
-    setMounted(true);
+  /**
+   * Resolves the signed-in user's role.
+   * 1. Try the backend profile (role from the local users collection —
+   *    reflects admin-panel role changes immediately).
+   * 2. Fall back to the Supabase session's user_metadata role.
+   */
+  const resolveRole = useCallback(async (): Promise<UserRole | null> => {
+    if (!supabase) return null;
+    const { data } = await supabase.auth.getSession();
+    const session = data.session;
+    if (!session) return null;
+
+    // 1. Backend profile (authoritative).
+    try {
+      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+      const res = await fetch(`${API_BASE_URL}/api/auth/profile`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const serverRole = json?.user?.role as UserRole | undefined;
+        if (serverRole) {
+          // Keep the backend users table in sync on first sign-in.
+          void fetch(`${API_BASE_URL}/api/auth/sync`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          }).catch(() => {});
+          return serverRole;
+        }
+      }
+    } catch {
+      // Backend unreachable — fall through to Supabase metadata.
+    }
+
+    // 2. Supabase metadata fallback.
+    const { data: userData } = await supabase.auth.getUser();
+    const metaRole = (userData.user?.app_metadata?.role ||
+      userData.user?.user_metadata?.role) as UserRole | undefined;
+    return metaRole || 'officer';
   }, []);
 
+  // Initial load + auth state listener.
   useEffect(() => {
-    if (!mounted) return;
+    setMounted(true);
     if (!supabase) {
-      // Supabase not configured — treat as unauthenticated
       setLoading(false);
-      if (!isPublic) {
-        router.push('/login');
-      }
       return;
     }
 
-    // Capture in a local const so TS knows the closure below can't run after
-    // the value has been nulled (it can't — `supabase` is module-level and
-    // never reassigned, but TS's narrowing doesn't survive the closure).
-    const client = supabase;
+    let cancelled = false;
 
-    const getSession = async () => {
-      const { data, error } = await client.auth.getSession();
-
-      if (error || !data.session) {
-        setRole(null);
+    const refresh = async () => {
+      const nextRole = await resolveRole();
+      if (!cancelled) {
+        setRole(nextRole);
         setLoading(false);
-        if (!isPublic) {
-          router.push('/login');
-        }
-        return;
       }
-
-      const userRole = (data.session.user?.app_metadata?.role || data.session.user?.user_metadata?.role || 'officer') as 'officer' | 'reviewer' | null;
-      setRole(userRole);
-      setLoading(false);
     };
 
-    getSession();
+    void refresh();
 
-    // Listen for auth changes
-    const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
-      if (session) {
-        const r = (session.user?.app_metadata?.role || session.user?.user_metadata?.role || 'officer') as 'officer' | 'reviewer' | null;
-        setRole(r);
-      } else {
+    const { data: authListener } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') {
         setRole(null);
-        if (!isPublic) {
-          router.push('/login');
-        }
+      } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        void refresh();
       }
-      setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
-  }, [mounted, isPublic, router]);
+    return () => {
+      cancelled = true;
+      authListener.subscription.unsubscribe();
+    };
+  }, [resolveRole]);
 
-  // Don't render nav on public pages
-  const showNav = !isPublic && mounted;
+  // Redirect unauthenticated users away from protected pages (and send
+  // signed-in users on public auth pages to the dashboard).
+  useEffect(() => {
+    if (!mounted || loading || isPublic) return;
+    if (!role) {
+      router.replace('/login');
+    }
+  }, [mounted, loading, isPublic, role, router]);
+
+  // Don't render nav on public pages; avoid flashing it before hydration.
+  const showNav = !isPublic && mounted && !!role;
 
   return (
     <NavContext.Provider value={{ role, loading }}>

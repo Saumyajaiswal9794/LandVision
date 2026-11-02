@@ -1,12 +1,11 @@
 import 'dotenv/config';
 import { pgPool } from '../config/db';
-import mongoose from 'mongoose';
 import { LandRecord } from '../models/LandRecord';
 import { env } from '../config/env';
 
 /**
  * Sprint 4: Seed synthetic plot boundaries into PostGIS.
- * Reads existing LandRecords from MongoDB and creates polygon geometries
+ * Reads existing LandRecords from the database and creates polygon geometries
  * for each unique khasraNumber + village combination.
  *
  * Coordinates are placed near Hamirpur, Himachal Pradesh (76.53, 31.68) as
@@ -50,8 +49,7 @@ function hashToGrid(str: string): { row: number; col: number } {
 }
 
 async function seedPlots() {
-  console.log('[Seed] Connecting to MongoDB...');
-  await mongoose.connect(env.MONGODB_URI);
+  console.log('[Seed] Connecting to Postgres (Supabase or local docker PostGIS)...');
 
   console.log('[Seed] Fetching LandRecords with khasra/village data...');
   const records = await LandRecord.find({
@@ -59,7 +57,7 @@ async function seedPlots() {
   }).lean();
 
   if (records.length === 0) {
-    console.log('[Seed] No LandRecords found in MongoDB. Seeding with sample data for demo villages.');
+    console.log('[Seed] No LandRecords found. Seeding with sample data for demo villages.');
   }
 
   // Build unique khasraNumber + village combos
@@ -123,8 +121,7 @@ async function seedPlots() {
     console.log('[Seed] Done!');
   } finally {
     pgClient.release();
-    await mongoose.disconnect();
-    await pgPool!.end();
+      await pgPool!.end();
   }
 }
 

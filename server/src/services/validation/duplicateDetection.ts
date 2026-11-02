@@ -61,59 +61,25 @@ export async function detectDuplicateFlags(
         : null;
 
     // -------------------------------------------------------------------
-    // Build the MongoDB query.
-    // We match on the per-row extractedFields so duplicates across rows
-    // (within the same document OR across documents) are caught.
+    // Single SQL query (Supabase Postgres) returns every row matching the
+    // same khasraNumber + village (+ sub-survey, + district scope), excluding
+    // the row itself. We then classify cross-doc vs within-doc duplicates.
     // -------------------------------------------------------------------
-    const baseQuery: Record<string, unknown> = {
-      'extractedFields.khasraNumber.value': khasraNumber,
-      'extractedFields.village.value': { $regex: `^${escapeRegex(village)}$`, $options: 'i' },
-    };
+    const matches = await LandRecord.findDuplicateMatches({
+      khasraNumber,
+      village,
+      subSurveyNumber,
+      district: input.district ?? null,
+      excludeRecordId: input.excludeRecordId ?? null,
+    });
 
-    if (subSurveyNumber) {
-      // Some rows may not have subSurveyNumber extracted at all — only
-      // count as a duplicate when the other row has the SAME sub-survey.
-      baseQuery['extractedFields.subSurveyNumber.value'] = subSurveyNumber;
-    } else {
-      // If THIS row has no sub-survey, match rows where sub-survey is
-      // missing/empty too (otherwise we'd flag too aggressively).
-      baseQuery['$or'] = [
-        { 'extractedFields.subSurveyNumber.value': { $exists: false } },
-        { 'extractedFields.subSurveyNumber.value': null },
-        { 'extractedFields.subSurveyNumber.value': '' },
-      ];
-    }
-
-    // Optional district scope — prevents cross-district false positives.
-    if (input.district) {
-      baseQuery['extractedFields.district.value'] = {
-        $regex: `^${escapeRegex(input.district)}$`,
-        $options: 'i',
-      };
-    }
-
-    // Exclude the row itself if we already have its _id.
-    if (input.excludeRecordId) {
-      baseQuery._id = { $ne: input.excludeRecordId };
-    }
-
-    // -------------------------------------------------------------------
     // 1. Cross-document duplicate check (different documentId).
-    // -------------------------------------------------------------------
     if (input.documentId) {
-      const crossDocQuery: Record<string, unknown> = {
-        ...baseQuery,
-        // Match rows whose documentId is set AND is not the current
-        // row's documentId. `$nin: [null, input.documentId]` is cleaner
-        // than combining `$ne: x` with `$ne: null` because the latter
-        // triggers TS1117 (duplicate keys in the same object literal).
-        documentId: { $exists: true, $nin: [null, input.documentId] },
-      };
-
-      const crossMatches = await LandRecord.find(crossDocQuery).limit(1).lean();
-      if (crossMatches.length > 0) {
-        const m = crossMatches[0] as any;
-        const otherDoc = m.documentId ?? '<unknown>';
+      const crossMatch = matches.find(
+        (m: any) => m.documentId && m.documentId !== input.documentId,
+      );
+      if (crossMatch) {
+        const otherDoc = crossMatch.documentId ?? '<unknown>';
         flags.push({
           rule: 'duplicate_detected_cross_doc',
           severity: 'error',
@@ -130,20 +96,16 @@ export async function detectDuplicateFlags(
       }
     }
 
-    // -------------------------------------------------------------------
     // 2. Within-document duplicate check (same documentId, different row).
-    // -------------------------------------------------------------------
     if (input.documentId) {
-      const withinDocQuery: Record<string, unknown> = {
-        ...baseQuery,
-        documentId: input.documentId,
-      };
-
-      const withinMatches = await LandRecord.find(withinDocQuery).limit(2).lean();
-      // `withinMatches` may include the current row itself (when called
-      // AFTER the row is saved). We need at least 2 matches (the current
-      // row + at least one sibling) to flag a within-doc duplicate.
-      if (withinMatches.length >= 2) {
+      const withinCount = matches.filter(
+        (m: any) => m.documentId === input.documentId &&
+          (!input.excludeRecordId || m.id !== input.excludeRecordId),
+      ).length;
+      // The current row is not yet saved when excludeRecordId is unset, so
+      // one matching sibling is enough to flag.
+      const threshold = input.excludeRecordId ? 1 : 1;
+      if (withinCount >= threshold) {
         flags.push({
           rule: 'duplicate_detected_within_doc',
           severity: 'error',
@@ -155,16 +117,15 @@ export async function detectDuplicateFlags(
         console.warn(
           `[Validation] Duplicate (within-doc): khasra="${khasraNumber}" ` +
           `subSurvey="${subSurveyNumber ?? '-'}" village="${village}" ` +
-          `appears ${withinMatches.length}+ times on documentId=${input.documentId}`,
+          `appears ${withinCount} time(s) on documentId=${input.documentId}`,
         );
       }
-    } else {
-      // No documentId supplied — just run a single global match query.
-      const matches = await LandRecord.find(baseQuery).limit(2).lean();
-      // If we get 2+ matches AND excludeRecordId was supplied, that means
-      // at least one other row exists with the same key (dedupe case).
-      // If excludeRecordId was NOT supplied (row not yet saved), even a
-      // single match indicates a duplicate.
+    }
+
+    // 3. Generic check when no documentId was supplied (row not tied to a
+    // document): a single other match is enough when the row is not yet
+    // saved (no excludeRecordId); otherwise require 2 to be safe.
+    if (!input.documentId) {
       const threshold = input.excludeRecordId ? 2 : 1;
       if (matches.length >= threshold) {
         flags.push({
@@ -227,9 +188,6 @@ export const detectDuplicateRecords = async (record: any): Promise<boolean> => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 export default {
   detectDuplicateFlags,

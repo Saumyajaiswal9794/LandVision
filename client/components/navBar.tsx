@@ -4,10 +4,10 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
-import { LayoutDashboard, Upload, FileSearch, LogOut, Menu, X, MapPin } from 'lucide-react';
+import { LayoutDashboard, Upload, FileSearch, LogOut, Menu, X, MapPin, Shield } from 'lucide-react';
 
 interface NavBarProps {
-  role?: 'officer' | 'reviewer' | null;
+  role?: 'officer' | 'reviewer' | 'admin' | null;
 }
 
 export function NavBar({ role }: NavBarProps) {
@@ -57,6 +57,12 @@ export function NavBar({ role }: NavBarProps) {
               <MapPin className="w-4 h-4" />
               Map
             </Link>
+            {role === 'admin' && (
+              <Link href="/admin" className={linkClass('/admin')}>
+                <Shield className="w-4 h-4" />
+                Admin
+              </Link>
+            )}
           </nav>
         </div>
 
@@ -105,6 +111,12 @@ export function NavBar({ role }: NavBarProps) {
             <MapPin className="w-4 h-4" />
             Map
           </Link>
+          {role === 'admin' && (
+            <Link href="/admin" className={linkClass('/admin')} onClick={() => setMobileOpen(false)}>
+              <Shield className="w-4 h-4" />
+              Admin
+            </Link>
+          )}
         </div>
       )}
     </header>
